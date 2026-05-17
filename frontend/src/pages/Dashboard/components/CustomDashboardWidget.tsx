@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useRef, useState, type ChangeEvent } from 'react'
 import {
   Box,
   Button,
@@ -8,9 +8,12 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Link,
   TextField,
   Typography,
 } from '@mui/material'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { DashboardCustomWidget } from '@/contexts/DashboardLayoutContext'
 import { useDashboardLayout } from '@/contexts/DashboardLayoutContext'
 
@@ -23,182 +26,225 @@ interface WidgetEditorDialogProps {
   onClose: () => void
 }
 
-const inlinePattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g
-
-const renderInline = (text: string): ReactNode[] => {
-  const nodes: ReactNode[] = []
-  let lastIndex = 0
-
-  text.replace(inlinePattern, (match, _token: string, offset: number) => {
-    if (offset > lastIndex) {
-      nodes.push(text.slice(lastIndex, offset))
-    }
-
-    if (match.startsWith('`')) {
-      nodes.push(
-        <Box
-          key={`${offset}-code`}
-          component="code"
-          sx={{
-            px: 0.5,
-            py: 0.1,
-            borderRadius: 0.5,
-            bgcolor: 'action.hover',
-            fontSize: '0.9em',
-          }}
-        >
-          {match.slice(1, -1)}
-        </Box>
-      )
-    } else if (match.startsWith('**')) {
-      nodes.push(<Box key={`${offset}-strong`} component="strong">{match.slice(2, -2)}</Box>)
-    } else if (match.startsWith('*')) {
-      nodes.push(<Box key={`${offset}-em`} component="em">{match.slice(1, -1)}</Box>)
-    } else {
-      const linkMatch = match.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-      if (linkMatch) {
-        nodes.push(
-          <Box
-            key={`${offset}-link`}
-            component="a"
-            href={linkMatch[2]}
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{ color: 'primary.main' }}
-          >
-            {linkMatch[1]}
-          </Box>
-        )
-      }
-    }
-
-    lastIndex = offset + match.length
-    return match
-  })
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex))
-  }
-
-  return nodes
+const markdownComponents: Components = {
+  h1: ({ children }) => (
+    <Typography component="h1" variant="h6" fontWeight={700} sx={{ mt: 0, mb: 0.8, lineHeight: 1.25 }}>
+      {children}
+    </Typography>
+  ),
+  h2: ({ children }) => (
+    <Typography component="h2" variant="subtitle1" fontWeight={700} sx={{ mt: 1.1, mb: 0.7, lineHeight: 1.28 }}>
+      {children}
+    </Typography>
+  ),
+  h3: ({ children }) => (
+    <Typography component="h3" variant="subtitle2" fontWeight={700} sx={{ mt: 1, mb: 0.6, lineHeight: 1.3 }}>
+      {children}
+    </Typography>
+  ),
+  h4: ({ children }) => (
+    <Typography component="h4" variant="body2" fontWeight={700} sx={{ mt: 0.9, mb: 0.55, lineHeight: 1.35 }}>
+      {children}
+    </Typography>
+  ),
+  h5: ({ children }) => (
+    <Typography component="h5" variant="body2" fontWeight={700} sx={{ mt: 0.8, mb: 0.5, lineHeight: 1.35 }}>
+      {children}
+    </Typography>
+  ),
+  h6: ({ children }) => (
+    <Typography component="h6" variant="caption" fontWeight={700} sx={{ display: 'block', mt: 0.7, mb: 0.45, lineHeight: 1.35 }}>
+      {children}
+    </Typography>
+  ),
+  p: ({ children }) => (
+    <Typography component="p" variant="body2" sx={{ m: 0, mb: 0.75, lineHeight: 1.55, overflowWrap: 'anywhere' }}>
+      {children}
+    </Typography>
+  ),
+  a: ({ href, title, children }) => (
+    <Link href={href} title={title} target="_blank" rel="noopener noreferrer" underline="hover">
+      {children}
+    </Link>
+  ),
+  ul: ({ children }) => (
+    <Box component="ul" sx={{ mt: 0, mb: 0.75, pl: 2.6, '& ul, & ol': { mt: 0.35, mb: 0.35 } }}>
+      {children}
+    </Box>
+  ),
+  ol: ({ children }) => (
+    <Box component="ol" sx={{ mt: 0, mb: 0.75, pl: 2.6, '& ul, & ol': { mt: 0.35, mb: 0.35 } }}>
+      {children}
+    </Box>
+  ),
+  li: ({ children }) => (
+    <Typography
+      component="li"
+      variant="body2"
+      sx={{
+        mb: 0.3,
+        lineHeight: 1.5,
+        pl: 0.2,
+        overflowWrap: 'anywhere',
+        '& > p': {
+          display: 'inline',
+          m: 0,
+        },
+      }}
+    >
+      {children}
+    </Typography>
+  ),
+  blockquote: ({ children }) => (
+    <Box
+      component="blockquote"
+      sx={{
+        m: 0,
+        mb: 0.85,
+        pl: 1.2,
+        borderLeft: 3,
+        borderColor: 'divider',
+        color: 'text.secondary',
+        '& > :last-child': { mb: 0 },
+      }}
+    >
+      {children}
+    </Box>
+  ),
+  code: ({ className, children }) => (
+    <Box
+      component="code"
+      className={className}
+      sx={{
+        px: 0.45,
+        py: 0.12,
+        borderRadius: 0.5,
+        bgcolor: 'action.hover',
+        fontFamily: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace',
+        fontSize: '0.9em',
+      }}
+    >
+      {children}
+    </Box>
+  ),
+  pre: ({ children }) => (
+    <Box
+      component="pre"
+      sx={{
+        m: 0,
+        mb: 0.9,
+        p: 1,
+        borderRadius: 1,
+        bgcolor: 'action.hover',
+        overflow: 'auto',
+        fontSize: '0.82rem',
+        lineHeight: 1.45,
+        '& code': {
+          p: 0,
+          bgcolor: 'transparent',
+          borderRadius: 0,
+          fontSize: 'inherit',
+        },
+      }}
+    >
+      {children}
+    </Box>
+  ),
+  table: ({ children }) => (
+    <Box sx={{ width: '100%', overflowX: 'auto', mb: 0.9 }}>
+      <Box
+        component="table"
+        sx={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          fontSize: '0.78rem',
+          lineHeight: 1.45,
+        }}
+      >
+        {children}
+      </Box>
+    </Box>
+  ),
+  th: ({ children }) => (
+    <Box
+      component="th"
+      sx={{
+        px: 0.75,
+        py: 0.55,
+        border: 1,
+        borderColor: 'divider',
+        bgcolor: 'action.hover',
+        textAlign: 'left',
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </Box>
+  ),
+  td: ({ children }) => (
+    <Box
+      component="td"
+      sx={{
+        px: 0.75,
+        py: 0.5,
+        border: 1,
+        borderColor: 'divider',
+        verticalAlign: 'top',
+        overflowWrap: 'anywhere',
+      }}
+    >
+      {children}
+    </Box>
+  ),
+  hr: () => <Box component="hr" sx={{ my: 1, border: 0, borderTop: 1, borderColor: 'divider' }} />,
+  img: ({ src, alt, title }) => (
+    <Box
+      component="img"
+      src={src}
+      alt={alt}
+      title={title}
+      sx={{
+        display: 'block',
+        maxWidth: '100%',
+        maxHeight: 240,
+        width: 'auto',
+        height: 'auto',
+        my: 0.8,
+        borderRadius: 1,
+        objectFit: 'contain',
+      }}
+    />
+  ),
+  input: ({ type, checked, disabled }) => (
+    <Box
+      component="input"
+      type={type}
+      checked={checked}
+      disabled={disabled}
+      readOnly
+      sx={{
+        mr: 0.65,
+        transform: 'translateY(1px)',
+      }}
+    />
+  ),
 }
 
 function MarkdownView({ value }: { value: string }) {
-  const blocks = useMemo(() => {
-    const lines = value.split(/\r?\n/)
-    const renderedBlocks: ReactNode[] = []
-    let codeBuffer: string[] = []
-    let inCode = false
-
-    lines.forEach((line, index) => {
-      if (line.trim().startsWith('```')) {
-        if (inCode) {
-          renderedBlocks.push(
-            <Box
-              key={`code-${index}`}
-              component="pre"
-              sx={{
-                m: 0,
-                mb: 1,
-                p: 1,
-                borderRadius: 1,
-                bgcolor: 'action.hover',
-                overflow: 'auto',
-                fontSize: '0.82rem',
-              }}
-            >
-              {codeBuffer.join('\n')}
-            </Box>
-          )
-          codeBuffer = []
-          inCode = false
-        } else {
-          inCode = true
-        }
-        return
-      }
-
-      if (inCode) {
-        codeBuffer.push(line)
-        return
-      }
-
-      if (!line.trim()) {
-        renderedBlocks.push(<Box key={`space-${index}`} sx={{ height: 8 }} />)
-        return
-      }
-
-      const headingMatch = line.match(/^(#{1,3})\s+(.+)$/)
-      if (headingMatch) {
-        const level = headingMatch[1].length
-        renderedBlocks.push(
-          <Typography
-            key={`heading-${index}`}
-            variant={level === 1 ? 'h6' : 'subtitle1'}
-            fontWeight={700}
-            sx={{ mb: 0.75, lineHeight: 1.25 }}
-          >
-            {renderInline(headingMatch[2])}
-          </Typography>
-        )
-        return
-      }
-
-      const listMatch = line.match(/^\s*[-*]\s+(.+)$/)
-      if (listMatch) {
-        renderedBlocks.push(
-          <Typography
-            key={`li-${index}`}
-            component="li"
-            variant="body2"
-            sx={{ ml: 2.2, mb: 0.35, lineHeight: 1.45 }}
-          >
-            {renderInline(listMatch[1])}
-          </Typography>
-        )
-        return
-      }
-
-      const quoteMatch = line.match(/^>\s+(.+)$/)
-      if (quoteMatch) {
-        renderedBlocks.push(
-          <Typography
-            key={`quote-${index}`}
-            variant="body2"
-            color="text.secondary"
-            sx={{
-              pl: 1.2,
-              mb: 0.5,
-              borderLeft: 3,
-              borderColor: 'divider',
-              lineHeight: 1.45,
-            }}
-          >
-            {renderInline(quoteMatch[1])}
-          </Typography>
-        )
-        return
-      }
-
-      renderedBlocks.push(
-        <Typography key={`p-${index}`} variant="body2" sx={{ mb: 0.6, lineHeight: 1.5 }}>
-          {renderInline(line)}
-        </Typography>
-      )
-    })
-
-    if (inCode && codeBuffer.length > 0) {
-      renderedBlocks.push(
-        <Box key="code-tail" component="pre" sx={{ m: 0, p: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
-          {codeBuffer.join('\n')}
-        </Box>
-      )
-    }
-
-    return renderedBlocks
-  }, [value])
-
-  return <>{blocks}</>
+  return (
+    <Box
+      sx={{
+        fontSize: '0.875rem',
+        '& > :first-of-type': { mt: 0 },
+        '& > :last-child': { mb: 0 },
+      }}
+    >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents} skipHtml>
+        {value}
+      </ReactMarkdown>
+    </Box>
+  )
 }
 
 function WidgetEditorDialog({ widget, onClose }: WidgetEditorDialogProps) {
