@@ -18,7 +18,8 @@
  * 
  * Copyright (c) 2025 by 1orz, All Rights Reserved. 
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   AppBar,
   Toolbar,
@@ -32,15 +33,23 @@ import {
   Divider,
 } from '@mui/material'
 import {
+  Add as AddIcon,
+  Article as ArticleIcon,
   Menu as MenuIcon,
   Refresh as RefreshIcon,
   MoreVert as MoreVertIcon,
   Brightness4 as DarkModeIcon,
   Brightness7 as LightModeIcon,
   Speed as SpeedIcon,
+  DashboardCustomize as DashboardCustomizeIcon,
+  Image as ImageIcon,
+  Restore as RestoreIcon,
+  Save as SaveIcon,
 } from '@mui/icons-material'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useRefreshInterval } from '../../contexts/RefreshContext'
+import { useDashboardLayout } from '../../contexts/DashboardLayoutContext'
+import { useFullDashboardLayout } from '../../pages/Dashboard/hooks/useFullDashboardLayout'
 
 interface TopBarProps {
   drawerWidth: number
@@ -57,8 +66,13 @@ export default function TopBar({
 }: TopBarProps) {
   const { mode, toggleTheme } = useTheme()
   const { triggerRefresh } = useRefreshInterval()
+  const { addCustomWidget, editMode, setEditMode, isDirty, saveLayout, resetLayout } = useDashboardLayout()
+  const location = useLocation()
+  const fullDashboardLayout = useFullDashboardLayout()
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const [refreshMenuAnchor, setRefreshMenuAnchor] = useState<null | HTMLElement>(null)
+  const [widgetMenuAnchor, setWidgetMenuAnchor] = useState<null | HTMLElement>(null)
+  const isDashboardRoute = location.pathname === '/'
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget)
@@ -76,6 +90,21 @@ export default function TopBar({
     setRefreshMenuAnchor(null)
   }
 
+  const handleWidgetMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    if (!fullDashboardLayout) return
+    setWidgetMenuAnchor(event.currentTarget)
+  }
+
+  const handleWidgetMenuClose = () => {
+    setWidgetMenuAnchor(null)
+  }
+
+  const handleAddWidget = (type: 'text' | 'image') => {
+    if (!fullDashboardLayout) return
+    addCustomWidget(type)
+    handleWidgetMenuClose()
+  }
+
   const handleRefreshIntervalChange = (interval: number) => {
     onRefreshIntervalChange(interval)
     handleRefreshMenuClose()
@@ -89,6 +118,23 @@ export default function TopBar({
     toggleTheme()
     handleMenuClose()
   }
+
+  const handleDashboardLayoutEdit = () => {
+    if (!fullDashboardLayout) return
+
+    if (isDirty) {
+      resetLayout()
+      return
+    }
+
+    setEditMode(!editMode)
+  }
+
+  useEffect(() => {
+    if ((!isDashboardRoute || !fullDashboardLayout) && (editMode || isDirty)) {
+      resetLayout()
+    }
+  }, [editMode, fullDashboardLayout, isDashboardRoute, isDirty, resetLayout])
 
   const getRefreshLabel = () => {
     if (refreshInterval === 0) return '手动'
@@ -134,6 +180,47 @@ export default function TopBar({
 
         {/* 右侧按钮组 */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1 } }}>
+          {isDashboardRoute && fullDashboardLayout && (
+            <>
+              {editMode && (
+                <IconButton
+                  color="inherit"
+                  onClick={handleWidgetMenuOpen}
+                  title="添加仪表盘内容"
+                  sx={{
+                    display: { xs: 'inline-flex', sm: 'inline-flex' },
+                    bgcolor: 'rgba(255, 255, 255, 0.12)',
+                  }}
+                >
+                  <AddIcon />
+                </IconButton>
+              )}
+
+              <IconButton
+                color="inherit"
+                onClick={handleDashboardLayoutEdit}
+                title={isDirty ? '恢复仪表盘布局' : editMode ? '关闭布局编辑' : '编辑仪表盘布局'}
+                sx={{
+                  display: { xs: 'inline-flex', sm: 'inline-flex' },
+                  bgcolor: editMode ? 'rgba(255, 255, 255, 0.12)' : 'transparent',
+                }}
+              >
+                {isDirty ? <RestoreIcon /> : <DashboardCustomizeIcon />}
+              </IconButton>
+
+              {isDirty && (
+                <IconButton
+                  color="inherit"
+                  onClick={saveLayout}
+                  title="保存仪表盘布局"
+                  sx={{ display: { xs: 'inline-flex', sm: 'inline-flex' } }}
+                >
+                  <SaveIcon />
+                </IconButton>
+              )}
+            </>
+          )}
+
           {/* 刷新按钮 - 始终显示 */}
           <IconButton
             color="inherit"
@@ -195,6 +282,39 @@ export default function TopBar({
               secondary={getRefreshLabel()}
               secondaryTypographyProps={{ variant: 'caption' }}
             />
+          </MenuItem>
+        </Menu>
+
+        <Menu
+          anchorEl={widgetMenuAnchor}
+          open={isDashboardRoute && fullDashboardLayout && Boolean(widgetMenuAnchor)}
+          onClose={handleWidgetMenuClose}
+          anchorOrigin={{
+            vertical: 'bottom',
+            horizontal: 'right',
+          }}
+          transformOrigin={{
+            vertical: 'top',
+            horizontal: 'right',
+          }}
+          PaperProps={{
+            sx: {
+              minWidth: 168,
+              mt: 1,
+            },
+          }}
+        >
+          <MenuItem onClick={() => handleAddWidget('text')}>
+            <ListItemIcon>
+              <ArticleIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>文字框</ListItemText>
+          </MenuItem>
+          <MenuItem onClick={() => handleAddWidget('image')}>
+            <ListItemIcon>
+              <ImageIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>图片框</ListItemText>
           </MenuItem>
         </Menu>
 

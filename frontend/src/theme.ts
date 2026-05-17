@@ -10,6 +10,15 @@
  */
 import { createTheme } from '@mui/material/styles'
 
+const appFontFamily = [
+  '"Google Sans"',
+  '"Product Sans"',
+  '"Noto Sans SC"',
+  '"Microsoft YaHei"',
+  'Arial',
+  'sans-serif',
+].join(',')
+
 // 创建自定义主题
 export const theme = createTheme({
   palette: {
@@ -50,15 +59,7 @@ export const theme = createTheme({
     },
   },
   typography: {
-    fontFamily: [
-      '-apple-system',
-      'BlinkMacSystemFont',
-      '"Segoe UI"',
-      'Roboto',
-      '"Helvetica Neue"',
-      'Arial',
-      'sans-serif',
-    ].join(','),
+    fontFamily: appFontFamily,
     h4: {
       fontWeight: 600,
     },
@@ -72,11 +73,14 @@ export const theme = createTheme({
   components: {
     MuiCard: {
       defaultProps: {
-        elevation: 2,
+        elevation: 0,
       },
       styleOverrides: {
         root: {
           borderRadius: 12,
+          backgroundImage: 'none',
+          border: '1px solid rgba(15, 23, 42, 0.06)',
+          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
         },
       },
     },

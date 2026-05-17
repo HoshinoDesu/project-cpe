@@ -9,12 +9,100 @@
  * Copyright (c) 2025 by 1orz, All Rights Reserved. 
  */
 import { Box, Card, CardContent, Typography, Stack, LinearProgress, Chip, Tooltip } from '@mui/material'
+import { useEffect, useRef, useState } from 'react'
 import { Speed, Memory, Storage, Thermostat, Usb, Info } from '@mui/icons-material'
 import { formatBytes, getCpuColor, getMemoryColor, getTempColor } from '../utils'
 import type { SystemStatsResponse } from '@/api/types'
 
 interface SystemResourcesProps {
   systemStats: SystemStatsResponse | null
+}
+
+const PROGRESS_SMOOTH_DURATION_MS = 720
+
+const easeOutCubic = (value: number) => 1 - Math.pow(1 - value, 3)
+
+const clampProgress = (value: number) => Math.min(Math.max(value, 0), 100)
+
+function SmoothLinearProgress({
+  value,
+  color,
+  height,
+  borderRadius,
+}: {
+  value: number
+  color: 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' | 'inherit'
+  height: number
+  borderRadius: number
+}) {
+  const targetValue = clampProgress(value)
+  const [displayValue, setDisplayValue] = useState(targetValue)
+  const displayValueRef = useRef(targetValue)
+  const frameRef = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    if (frameRef.current !== undefined) {
+      window.cancelAnimationFrame(frameRef.current)
+    }
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const startValue = displayValueRef.current
+
+    if (reduceMotion) {
+      displayValueRef.current = targetValue
+      frameRef.current = window.requestAnimationFrame(() => {
+        setDisplayValue(targetValue)
+        frameRef.current = undefined
+      })
+      return () => {
+        if (frameRef.current !== undefined) {
+          window.cancelAnimationFrame(frameRef.current)
+          frameRef.current = undefined
+        }
+      }
+    }
+
+    const startedAt = performance.now()
+
+    const animate = (now: number) => {
+      const progress = easeOutCubic(Math.min((now - startedAt) / PROGRESS_SMOOTH_DURATION_MS, 1))
+      const nextValue = startValue + (targetValue - startValue) * progress
+      displayValueRef.current = nextValue
+      setDisplayValue(nextValue)
+
+      if (progress < 1) {
+        frameRef.current = window.requestAnimationFrame(animate)
+      } else {
+        displayValueRef.current = targetValue
+        setDisplayValue(targetValue)
+        frameRef.current = undefined
+      }
+    }
+
+    frameRef.current = window.requestAnimationFrame(animate)
+
+    return () => {
+      if (frameRef.current !== undefined) {
+        window.cancelAnimationFrame(frameRef.current)
+        frameRef.current = undefined
+      }
+    }
+  }, [targetValue])
+
+  return (
+    <LinearProgress
+      variant="determinate"
+      value={displayValue}
+      color={color}
+      sx={{
+        height,
+        borderRadius,
+        '& .MuiLinearProgress-bar': {
+          transition: 'none',
+        },
+      }}
+    />
+  )
 }
 
 export function SystemResources({ systemStats }: SystemResourcesProps) {
@@ -49,11 +137,11 @@ export function SystemResources({ systemStats }: SystemResourcesProps) {
                 {systemStats?.cpu_load ? `${systemStats.cpu_load.load_percent.toFixed(0)}%` : '-'}
               </Typography>
             </Box>
-            <LinearProgress
-              variant="determinate"
+            <SmoothLinearProgress
               value={systemStats?.cpu_load?.load_percent || 0}
               color={getCpuColor(systemStats?.cpu_load?.load_percent || 0)}
-              sx={{ height: 4, borderRadius: 2 }}
+              height={4}
+              borderRadius={2}
             />
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
               负载: {systemStats?.cpu_load?.load_1min.toFixed(2) || '-'} / {systemStats?.cpu_load?.load_5min.toFixed(2) || '-'} / {systemStats?.cpu_load?.load_15min.toFixed(2) || '-'}
@@ -76,11 +164,11 @@ export function SystemResources({ systemStats }: SystemResourcesProps) {
                 {systemStats?.memory ? `${systemStats.memory.used_percent.toFixed(0)}%` : '-'}
               </Typography>
             </Box>
-            <LinearProgress
-              variant="determinate"
+            <SmoothLinearProgress
               value={systemStats?.memory?.used_percent || 0}
               color={getMemoryColor(systemStats?.memory?.used_percent || 0)}
-              sx={{ height: 4, borderRadius: 2 }}
+              height={4}
+              borderRadius={2}
             />
           </Box>
 
@@ -101,11 +189,11 @@ export function SystemResources({ systemStats }: SystemResourcesProps) {
                       {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({disk.used_percent.toFixed(0)}%)
                     </Typography>
                   </Box>
-                  <LinearProgress
-                    variant="determinate"
+                  <SmoothLinearProgress
                     value={disk.used_percent}
                     color={getMemoryColor(disk.used_percent)}
-                    sx={{ height: 3, borderRadius: 1.5 }}
+                    height={3}
+                    borderRadius={1.5}
                   />
                 </Box>
               ))}

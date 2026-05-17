@@ -49,6 +49,7 @@ mod state;
 mod usb_switch;
 mod utils;
 mod webhook;
+mod ws;
 
 use config::{ConfigManager, get_default_config_path};
 use dbus::init_data_connection;
@@ -56,6 +57,7 @@ use handlers::*;
 use db::Database;
 use state::AppState;
 use webhook::WebhookSender;
+use ws::dashboard_ws_handler;
 
 /// 获取二进制文件同级目录下的 www 目录路径
 fn get_www_dir() -> PathBuf {
@@ -297,6 +299,10 @@ async fn main() -> Result<()> {
         .route("/api/connectivity", get(get_connectivity_check).options(options_handler))
         .route("/api/system/reboot", post(system_reboot).options(options_handler))
         .route("/api/health", get(health_check))
+        // ========== WebSocket 实时推送接口 ==========
+        .route("/api/ws/dashboard", get(dashboard_ws_handler))
+        // ========== UI 个性化配置接口 ==========
+        .route("/api/ui/preferences", get(get_ui_preferences_handler).post(update_ui_preferences_handler).options(options_handler))
         // ========== Webhook 配置接口 ==========
         .route("/api/webhook/config", get(get_webhook_config_handler).post(set_webhook_config_handler).options(options_handler))
         .route("/api/webhook/test", post(test_webhook_handler).options(options_handler))

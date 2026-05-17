@@ -9,7 +9,7 @@
  * Copyright (c) 2025 by 1orz, All Rights Reserved. 
  */
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { api } from '@/api'
+import { api, getDashboardWebSocketUrl } from '@/api'
 import type {
   DeviceInfo,
   NetworkInfo,
@@ -20,10 +20,14 @@ import type {
   AirplaneModeResponse,
   ImsStatusResponse,
   RoamingResponse,
+  ConnectivityCheckResponse,
+  DashboardSnapshot,
+  DashboardWsMessage,
 } from '@/api/types'
 
 // 网速历史记录的最大数据点数
 export const SPEED_HISTORY_MAX_POINTS = 30
+export const LATENCY_HISTORY_MAX_POINTS = 30
 
 // 单个接口的速度历史类型
 export interface InterfaceSpeedHistory {
@@ -33,9 +37,9 @@ export interface InterfaceSpeedHistory {
   totalTx: number
 }
 
-export interface ConnectivityResult {
-  ipv4: { success: boolean; latency_ms?: number }
-  ipv6: { success: boolean; latency_ms?: number }
+export interface ConnectivityLatencyHistory {
+  ipv4: number[]
+  ipv6: number[]
 }
 
 export interface DashboardData {
@@ -48,7 +52,8 @@ export interface DashboardData {
   qosInfo: QosInfo | null
   airplaneMode: AirplaneModeResponse | null
   imsStatus: ImsStatusResponse | null
-  connectivity: ConnectivityResult | null
+  connectivity: ConnectivityCheckResponse | null
+  latencyHistory: ConnectivityLatencyHistory
   speedHistory: Record<string, InterfaceSpeedHistory>
   roaming: RoamingResponse | null
 }
@@ -74,12 +79,14 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
   const [qosInfo, setQosInfo] = useState<QosInfo | null>(null)
   const [airplaneMode, setAirplaneMode] = useState<AirplaneModeResponse | null>(null)
   const [imsStatus, setImsStatus] = useState<ImsStatusResponse | null>(null)
-  const [connectivity, setConnectivity] = useState<ConnectivityResult | null>(null)
+  const [connectivity, setConnectivity] = useState<ConnectivityCheckResponse | null>(null)
   const [roaming, setRoaming] = useState<RoamingResponse | null>(null)
 
   // 网速历史记录
   const [speedHistory, setSpeedHistory] = useState<Record<string, InterfaceSpeedHistory>>({})
   const speedHistoryRef = useRef<Record<string, InterfaceSpeedHistory>>({})
+  const [latencyHistory, setLatencyHistory] = useState<ConnectivityLatencyHistory>({ ipv4: [], ipv6: [] })
+  const latencyHistoryRef = useRef<ConnectivityLatencyHistory>({ ipv4: [], ipv6: [] })
 
   // 更新速度历史记录
   const updateSpeedHistory = useCallback((stats: SystemStatsResponse | null) => {
@@ -110,6 +117,53 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
     setSpeedHistory(newHistory)
   }, [])
 
+  const updateLatencyHistory = useCallback((nextConnectivity: ConnectivityCheckResponse | null) => {
+    if (!nextConnectivity) return
+
+    const nextHistory: ConnectivityLatencyHistory = {
+      ipv4: [...latencyHistoryRef.current.ipv4],
+      ipv6: [...latencyHistoryRef.current.ipv6],
+    }
+
+    ;(['ipv4', 'ipv6'] as const).forEach((key) => {
+      const latency = nextConnectivity[key]?.latency_ms
+
+      if (typeof latency !== 'number' || !Number.isFinite(latency)) return
+
+      nextHistory[key].push(latency)
+
+      if (nextHistory[key].length > LATENCY_HISTORY_MAX_POINTS) {
+        nextHistory[key].shift()
+      }
+    })
+
+    latencyHistoryRef.current = nextHistory
+    setLatencyHistory(nextHistory)
+  }, [])
+
+  const applySnapshot = useCallback((snapshot: DashboardSnapshot) => {
+    if (snapshot.deviceInfo !== undefined) setDeviceInfo(snapshot.deviceInfo)
+    if (snapshot.simInfo !== undefined) setSimInfo(snapshot.simInfo)
+    if (snapshot.networkInfo !== undefined) setNetworkInfo(snapshot.networkInfo)
+    if (snapshot.dataStatus !== undefined && snapshot.dataStatus !== null) {
+      setDataStatus(snapshot.dataStatus)
+    }
+    if (snapshot.cellsInfo !== undefined) setCellsInfo(snapshot.cellsInfo)
+    if (snapshot.qosInfo !== undefined) setQosInfo(snapshot.qosInfo)
+    if (snapshot.airplaneMode !== undefined) setAirplaneMode(snapshot.airplaneMode)
+    if (snapshot.imsStatus !== undefined) setImsStatus(snapshot.imsStatus)
+    if (snapshot.connectivity !== undefined) {
+      setConnectivity(snapshot.connectivity)
+      updateLatencyHistory(snapshot.connectivity)
+    }
+    if (snapshot.roaming !== undefined) setRoaming(snapshot.roaming)
+    if (snapshot.systemStats !== undefined) {
+      setSystemStats(snapshot.systemStats)
+      updateSpeedHistory(snapshot.systemStats)
+    }
+    setInitialLoading(false)
+  }, [updateLatencyHistory, updateSpeedHistory])
+
   // 加载数据
   const loadData = useCallback(async () => {
     setError(null)
@@ -125,17 +179,16 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
         api.getAirplaneMode(),
       ])
 
-      if (deviceRes.data) setDeviceInfo(deviceRes.data)
-      if (simRes.data) setSimInfo(simRes.data)
-      if (statsRes.data) {
-        setSystemStats(statsRes.data)
-        updateSpeedHistory(statsRes.data)
-      }
-      if (networkRes.data) setNetworkInfo(networkRes.data)
-      if (dataRes.data) setDataStatus(dataRes.data.active)
-      if (cellsRes.data) setCellsInfo(cellsRes.data)
-      if (qosRes.data) setQosInfo(qosRes.data)
-      if (airplaneModeRes.data) setAirplaneMode(airplaneModeRes.data)
+      applySnapshot({
+        deviceInfo: deviceRes.data,
+        simInfo: simRes.data,
+        systemStats: statsRes.data,
+        networkInfo: networkRes.data,
+        dataStatus: dataRes.data?.active,
+        cellsInfo: cellsRes.data,
+        qosInfo: qosRes.data,
+        airplaneMode: airplaneModeRes.data,
+      })
 
       // 加载扩展数据
       try {
@@ -144,9 +197,11 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
           api.getConnectivity(),
           api.getRoamingStatus(),
         ])
-        if (imsRes.data) setImsStatus(imsRes.data)
-        if (connectivityRes.data) setConnectivity(connectivityRes.data)
-        if (roamingRes.data) setRoaming(roamingRes.data)
+        applySnapshot({
+          imsStatus: imsRes.data,
+          connectivity: connectivityRes.data,
+          roaming: roamingRes.data,
+        })
       } catch {
         console.warn('Extended data not fully available')
       }
@@ -155,7 +210,7 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
     } finally {
       setInitialLoading(false)
     }
-  }, [updateSpeedHistory])
+  }, [applySnapshot])
 
   // 切换数据连接
   const toggleData = useCallback(async () => {
@@ -194,14 +249,93 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
     }
   }, [roaming?.roaming_allowed])
 
-  // 自动刷新
+  // WebSocket 实时刷新；连接失败时自动退回 HTTP 轮询
   useEffect(() => {
-    void loadData()
-    if (refreshInterval > 0) {
-      const interval = setInterval(() => void loadData(), refreshInterval)
-      return () => clearInterval(interval)
+    let socket: WebSocket | null = null
+    let fallbackInterval: number | undefined
+    let openTimeout: number | undefined
+    let closedByEffect = false
+
+    const stopFallbackPolling = () => {
+      if (fallbackInterval !== undefined) {
+        window.clearInterval(fallbackInterval)
+        fallbackInterval = undefined
+      }
     }
-  }, [refreshInterval, refreshKey, loadData])
+
+    const startFallbackPolling = () => {
+      if (fallbackInterval === undefined && refreshInterval > 0) {
+        fallbackInterval = window.setInterval(() => void loadData(), refreshInterval)
+      }
+    }
+
+    void loadData()
+
+    if (refreshInterval <= 0 || typeof WebSocket === 'undefined') {
+      return undefined
+    }
+
+    try {
+      socket = new WebSocket(getDashboardWebSocketUrl(refreshInterval))
+    } catch {
+      startFallbackPolling()
+      return () => stopFallbackPolling()
+    }
+
+    openTimeout = window.setTimeout(() => {
+      if (socket?.readyState !== WebSocket.OPEN) {
+        startFallbackPolling()
+      }
+    }, 4000)
+
+    socket.onopen = () => {
+      if (openTimeout !== undefined) {
+        window.clearTimeout(openTimeout)
+        openTimeout = undefined
+      }
+      stopFallbackPolling()
+    }
+
+    socket.onmessage = (event: MessageEvent) => {
+      if (typeof event.data !== 'string') return
+
+      try {
+        const message = JSON.parse(event.data) as DashboardWsMessage
+        if (message.type === 'dashboard' && message.data) {
+          setError(null)
+          applySnapshot(message.data)
+        } else if (message.type === 'error' && message.message) {
+          setError(message.message)
+        }
+      } catch (err) {
+        console.warn('Invalid dashboard WebSocket payload:', err)
+      }
+    }
+
+    socket.onerror = () => {
+      startFallbackPolling()
+    }
+
+    socket.onclose = () => {
+      if (!closedByEffect) {
+        startFallbackPolling()
+      }
+    }
+
+    return () => {
+      closedByEffect = true
+      if (openTimeout !== undefined) window.clearTimeout(openTimeout)
+      stopFallbackPolling()
+      socket?.close()
+    }
+  }, [refreshInterval, loadData, applySnapshot])
+
+  // 手动刷新按钮保持即时 HTTP 刷新，不需要重连 WebSocket
+  useEffect(() => {
+    if (refreshKey > 0) {
+      void loadData()
+    }
+  }, [refreshKey, loadData])
 
   return {
     initialLoading,
@@ -218,6 +352,7 @@ export function useDashboardData(refreshInterval: number, refreshKey: number) {
       airplaneMode,
       imsStatus,
       connectivity,
+      latencyHistory,
       speedHistory,
       roaming,
     } as DashboardData,

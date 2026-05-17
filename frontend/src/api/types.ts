@@ -596,6 +596,47 @@ export interface ConnectivityCheckResponse {
   ipv6: PingResult       // IPv6 连通性
 }
 
+// ============ WebSocket 实时仪表盘 ============
+
+export interface DashboardSnapshot {
+  deviceInfo?: DeviceInfo | null
+  simInfo?: SimInfo | null
+  systemStats?: SystemStatsResponse | null
+  networkInfo?: NetworkInfo | null
+  dataStatus?: boolean | null
+  cellsInfo?: CellsResponse | null
+  qosInfo?: QosInfo | null
+  airplaneMode?: AirplaneModeResponse | null
+  imsStatus?: ImsStatusResponse | null
+  connectivity?: ConnectivityCheckResponse | null
+  roaming?: RoamingResponse | null
+}
+
+export interface DashboardWsMessage {
+  type: 'dashboard' | 'error'
+  timestamp: string
+  data?: DashboardSnapshot
+  errors?: string[]
+  message?: string
+}
+
+// ============ UI 个性化配置 ============
+
+export interface UiDashboardLayoutPreference {
+  layout?: unknown
+  widgets?: unknown
+}
+
+export interface UiPreferences {
+  theme_mode?: 'light' | 'dark'
+  theme_primary_color?: string
+  device_name?: string
+  refresh_interval?: number
+  dashboard_layout?: UiDashboardLayoutPreference | null
+}
+
+export type UiPreferencesPatch = Partial<UiPreferences>
+
 // ============ 通话记录类型 ============
 
 // 通话记录

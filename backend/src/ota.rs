@@ -238,20 +238,36 @@ pub fn apply_ota_update(restart_now: bool) -> Result<String, String> {
 
     let staging_binary = format!("{}/udx710", OTA_STAGING_DIR);
     let staging_www = format!("{}/www", OTA_STAGING_DIR);
+    let temp_binary = format!("{}.new", OTA_BINARY_PATH);
+    let temp_www = format!("{}.new", OTA_WWW_PATH);
+    let old_www = format!("{}.old", OTA_WWW_PATH);
 
-    // 复制新的二进制文件（覆盖旧文件）
-    fs::copy(&staging_binary, OTA_BINARY_PATH)
+    // Running Linux binaries cannot be opened for overwrite. Copy to a sibling
+    // path first, then atomically rename it over the executable.
+    let _ = fs::remove_file(&temp_binary);
+    fs::copy(&staging_binary, &temp_binary)
         .map_err(|e| format!("Failed to copy binary: {}", e))?;
     
     // 设置权限
     Command::new("chmod")
-        .args(["755", OTA_BINARY_PATH])
+        .args(["755", &temp_binary])
         .output()
         .map_err(|e| format!("Failed to chmod: {}", e))?;
 
-    // 复制前端文件（删除旧目录，复制新目录）
-    let _ = fs::remove_dir_all(OTA_WWW_PATH);
-    copy_dir_recursive(&staging_www, OTA_WWW_PATH)?;
+    fs::rename(&temp_binary, OTA_BINARY_PATH)
+        .map_err(|e| format!("Failed to replace binary: {}", e))?;
+
+    // 复制前端文件：先复制到新目录，再切换，避免复制失败导致旧前端被删除
+    let _ = fs::remove_dir_all(&temp_www);
+    let _ = fs::remove_dir_all(&old_www);
+    copy_dir_recursive(&staging_www, &temp_www)?;
+    if Path::new(OTA_WWW_PATH).exists() {
+        fs::rename(OTA_WWW_PATH, &old_www)
+            .map_err(|e| format!("Failed to backup frontend: {}", e))?;
+    }
+    fs::rename(&temp_www, OTA_WWW_PATH)
+        .map_err(|e| format!("Failed to replace frontend: {}", e))?;
+    let _ = fs::remove_dir_all(&old_www);
 
     // 清理暂存目录
     let _ = fs::remove_dir_all(OTA_STAGING_DIR);

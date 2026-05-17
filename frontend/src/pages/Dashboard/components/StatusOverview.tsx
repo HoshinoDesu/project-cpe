@@ -58,7 +58,8 @@ export function StatusOverview({
       elevation={0}
       sx={{
         p: 2,
-        mb: 2,
+        mb: 0,
+        height: '100%',
         borderRadius: 2,
         background: (() => {
           const primaryMain = (theme.palette.primary as { main: string }).main

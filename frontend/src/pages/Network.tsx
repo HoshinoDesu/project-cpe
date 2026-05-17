@@ -86,6 +86,11 @@ interface TabPanelProps {
   value: number
 }
 
+interface LoadDataOptions {
+  includeApn?: boolean
+  syncApnForm?: boolean
+}
+
 function TabPanel(props: TabPanelProps) {
   const { children, value, index, ...other } = props
   return (
@@ -118,6 +123,10 @@ export default function NetworkPage() {
   const [lockingCell, setLockingCell] = useState<string | null>(null) // 正在锁定的小区 key
   const [unlocking, setUnlocking] = useState(false)
   const [cellLockStatus, setCellLockStatus] = useState<CellLockStatusResponse | null>(null)
+  const [manualCellLock, setManualCellLock] = useState({
+    arfcn: '',
+    pci: '',
+  })
   
   // 网络接口状态
   const [interfaces, setInterfaces] = useState<NetworkInterfaceInfo[]>([])
@@ -147,6 +156,7 @@ export default function NetworkPage() {
   })
   const [apnSaving, setApnSaving] = useState(false)
   const [apnInitialized, setApnInitialized] = useState(false) // 控制 APN 只初始化一次
+  const [apnDirty, setApnDirty] = useState(false)
   
   // 频段配置刷新中
   const [bandConfigRefreshing, setBandConfigRefreshing] = useState(false)
@@ -201,18 +211,45 @@ export default function NetworkPage() {
     }
   }
 
-  // 加载其他数据（自动刷新时调用，不包含频段锁定配置）
-  const loadData = async () => {
+  const syncApnFormFromContext = (context: ApnContext) => {
+    setSelectedContext(context.path)
+    setApnForm({
+      apn: context.apn,
+      protocol: context.protocol,
+      username: context.username,
+      password: context.password,
+      auth_method: context.auth_method,
+    })
+    setApnDirty(false)
+    setApnInitialized(true)
+  }
+
+  const updateApnContexts = (contexts: ApnContext[], syncForm = false) => {
+    setApnContexts(contexts)
+
+    const selected = selectedContext ? contexts.find(c => c.path === selectedContext) : undefined
+    const fallback = contexts.find(c => c.apn) || contexts[0]
+    const targetContext = selected || fallback
+
+    if (!targetContext) return
+
+    if (syncForm || !apnInitialized || (!selected && !apnDirty)) {
+      syncApnFormFromContext(targetContext)
+    }
+  }
+
+  // 加载其他数据。自动刷新不加载 APN，避免覆盖正在编辑的配置表单。
+  const loadData = async (options: LoadDataOptions = {}) => {
+    const { includeApn = false, syncApnForm = false } = options
     setError(null)
     
     try {
-      const [cellsRes, operatorsRes, cellLocRes, cellLockRes, interfacesRes, apnRes] = await Promise.all([
+      const [cellsRes, operatorsRes, cellLocRes, cellLockRes, interfacesRes] = await Promise.all([
         api.getCellsInfo(),
         api.getOperators(),
         api.getCellLocationInfo(),
         api.getCellLockStatus(),
         api.getNetworkInterfaces(),
-        api.getApnList(),
       ])
       
       if (cellsRes.data) setCellsInfo(cellsRes.data)
@@ -220,23 +257,11 @@ export default function NetworkPage() {
       if (cellLocRes.data) setCellLocation(cellLocRes.data)
       if (cellLockRes.data) setCellLockStatus(cellLockRes.data)
       if (interfacesRes.data) setInterfaces(interfacesRes.data.interfaces)
-      
-      if (apnRes.data?.contexts) {
-        setApnContexts(apnRes.data.contexts)
-        // 只在首次加载时初始化 APN 表单，避免覆盖用户输入
-        if (!apnInitialized) {
-          const activeContext = apnRes.data.contexts.find(c => c.apn) || apnRes.data.contexts[0]
-          if (activeContext) {
-            setSelectedContext(activeContext.path)
-            setApnForm({
-              apn: activeContext.apn,
-              protocol: activeContext.protocol,
-              username: activeContext.username,
-              password: activeContext.password,
-              auth_method: activeContext.auth_method,
-            })
-          }
-          setApnInitialized(true)
+
+      if (includeApn) {
+        const apnRes = await api.getApnList()
+        if (apnRes.data?.contexts) {
+          updateApnContexts(apnRes.data.contexts, syncApnForm)
         }
       }
     } catch (err) {
@@ -249,7 +274,7 @@ export default function NetworkPage() {
   // 首次加载：加载所有数据（包括频段配置）
   const loadAllData = async () => {
     await Promise.all([
-      loadData(),
+      loadData({ includeApn: true }),
       loadBandLockConfig(),
     ])
   }
@@ -387,6 +412,54 @@ export default function NetworkPage() {
     }
   }
 
+  const getManualCellLockRat = (arfcn: number) => {
+    if (currentRadioMode === 'lte') return 12
+    if (currentRadioMode === 'nr') return 16
+    return arfcn > 65535 ? 16 : 12
+  }
+
+  // 手动 ARFCN/PCI 小区锁定
+  const handleManualCellLock = async () => {
+    const arfcn = parseInt(manualCellLock.arfcn.trim(), 10)
+    const pci = parseInt(manualCellLock.pci.trim(), 10)
+    const rat = getManualCellLockRat(arfcn)
+    const ratName = rat === 16 ? 'NR' : 'LTE'
+
+    setLockingCell('manual')
+    setError(null)
+
+    try {
+      if (!Number.isInteger(arfcn) || arfcn <= 0 || !Number.isInteger(pci) || pci < 0) {
+        setError('请输入有效的 ARFCN 和 PCI')
+        return
+      }
+
+      const pciLimit = rat === 16 ? 1007 : 503
+      if (pci > pciLimit) {
+        setError(`${ratName} PCI 范围应为 0-${pciLimit}`)
+        return
+      }
+
+      const result = await api.setCellLock({
+        rat,
+        enable: true,
+        arfcn,
+        pci,
+      })
+
+      if (result.status === 'ok') {
+        setSuccess(`已锁定到 ${ratName} 小区 (ARFCN=${arfcn}, PCI=${pci})`)
+        setTimeout(() => void loadData(), 2000)
+      } else {
+        setError(result.message || '锁定失败')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLockingCell(null)
+    }
+  }
+
   // 解锁所有小区
   const handleUnlockAllCells = async () => {
     setUnlocking(true)
@@ -493,16 +566,12 @@ export default function NetworkPage() {
 
   // APN 选择变更
   const handleContextChange = (path: string) => {
-    setSelectedContext(path)
     const context = apnContexts.find(c => c.path === path)
     if (context) {
-      setApnForm({
-        apn: context.apn,
-        protocol: context.protocol,
-        username: context.username,
-        password: context.password,
-        auth_method: context.auth_method,
-      })
+      syncApnFormFromContext(context)
+    } else {
+      setSelectedContext(path)
+      setApnDirty(false)
     }
   }
 
@@ -528,7 +597,10 @@ export default function NetworkPage() {
       })
       
       setSuccess('APN 配置已保存')
-      setTimeout(() => { void loadData() }, 1000)
+      setApnDirty(false)
+      setTimeout(() => {
+        void loadData({ includeApn: true, syncApnForm: true })
+      }, 1000)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -1035,6 +1107,65 @@ export default function NetworkPage() {
 
             <Divider sx={{ my: 1.5 }} />
 
+            {/* ARFCN/PCI 小区锁定 */}
+            <Box mb={2.25}>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                ARFCN/PCI 小区锁定
+              </Typography>
+              <Stack direction="row" spacing={1} rowGap={1.25} flexWrap="wrap" useFlexGap alignItems="center">
+                <TextField
+                  label="ARFCN"
+                  value={manualCellLock.arfcn}
+                  onChange={(event) => setManualCellLock(prev => ({ ...prev, arfcn: event.target.value.replace(/\D/g, '') }))}
+                  size="small"
+                  disabled={!!lockingCell || unlocking}
+                  inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
+                  sx={{
+                    width: { xs: 'calc(50% - 4px)', sm: 132 },
+                    '& .MuiInputBase-input': { fontSize: '0.875rem' },
+                    '& .MuiInputLabel-root:not(.MuiInputLabel-shrink)': { fontSize: '0.875rem' },
+                  }}
+                />
+                <TextField
+                  label="PCI"
+                  value={manualCellLock.pci}
+                  onChange={(event) => setManualCellLock(prev => ({ ...prev, pci: event.target.value.replace(/\D/g, '') }))}
+                  size="small"
+                  disabled={!!lockingCell || unlocking}
+                  inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
+                  sx={{
+                    width: { xs: 'calc(50% - 4px)', sm: 108 },
+                    '& .MuiInputBase-input': { fontSize: '0.875rem' },
+                    '& .MuiInputLabel-root:not(.MuiInputLabel-shrink)': { fontSize: '0.875rem' },
+                  }}
+                />
+                <Button
+                  variant="contained"
+                  color="warning"
+                  size="small"
+                  onClick={() => void handleManualCellLock()}
+                  disabled={!!lockingCell || unlocking || !manualCellLock.arfcn.trim() || !manualCellLock.pci.trim()}
+                  startIcon={lockingCell === 'manual' ? <CircularProgress size={14} /> : <Lock />}
+                  sx={{ minHeight: 32, px: 1.25 }}
+                >
+                  {lockingCell === 'manual' ? '锁定中' : '锁定小区'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="success"
+                  size="small"
+                  onClick={() => void handleUnlockAllCells()}
+                  disabled={!!lockingCell || unlocking}
+                  startIcon={unlocking ? <CircularProgress size={14} /> : <LockOpen />}
+                  sx={{ minHeight: 32, px: 1.25 }}
+                >
+                  解除小区锁定
+                </Button>
+              </Stack>
+            </Box>
+
+            <Divider sx={{ my: 1.5 }} />
+
             {/* 锁定模式选择 */}
             <Box mb={2}>
               <Typography variant="caption" color="text.secondary" gutterBottom display="block">
@@ -1465,7 +1596,10 @@ export default function NetworkPage() {
                     <TextField
                       label="APN 名称"
                       value={apnForm.apn}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setApnForm({ ...apnForm, apn: e.target.value })}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                        setApnDirty(true)
+                        setApnForm(prev => ({ ...prev, apn: e.target.value }))
+                      }}
                       fullWidth
                       placeholder="例如: cbnet, cmnet, 3gnet"
                       helperText="运营商提供的接入点名称"
@@ -1477,7 +1611,10 @@ export default function NetworkPage() {
                       <Select
                         value={apnForm.protocol}
                         label="IP 协议"
-                        onChange={(e) => setApnForm({ ...apnForm, protocol: e.target.value })}
+                        onChange={(e) => {
+                          setApnDirty(true)
+                          setApnForm(prev => ({ ...prev, protocol: e.target.value }))
+                        }}
                       >
                         <MenuItem value="ip">IPv4</MenuItem>
                         <MenuItem value="ipv6">IPv6</MenuItem>
@@ -1491,7 +1628,10 @@ export default function NetworkPage() {
                         <TextField
                           label="用户名"
                           value={apnForm.username}
-                          onChange={(e: ChangeEvent<HTMLInputElement>) => setApnForm({ ...apnForm, username: e.target.value })}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            setApnDirty(true)
+                            setApnForm(prev => ({ ...prev, username: e.target.value }))
+                          }}
                           fullWidth
                           placeholder="可选"
                         />
@@ -1501,7 +1641,10 @@ export default function NetworkPage() {
                           label="密码"
                           type="password"
                           value={apnForm.password}
-                          onChange={(e: ChangeEvent<HTMLInputElement>) => setApnForm({ ...apnForm, password: e.target.value })}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            setApnDirty(true)
+                            setApnForm(prev => ({ ...prev, password: e.target.value }))
+                          }}
                           fullWidth
                           placeholder="可选"
                         />
@@ -1514,7 +1657,10 @@ export default function NetworkPage() {
                       <Select
                         value={apnForm.auth_method}
                         label="认证方式"
-                        onChange={(e) => setApnForm({ ...apnForm, auth_method: e.target.value })}
+                        onChange={(e) => {
+                          setApnDirty(true)
+                          setApnForm(prev => ({ ...prev, auth_method: e.target.value }))
+                        }}
                       >
                         <MenuItem value="none">无</MenuItem>
                         <MenuItem value="pap">PAP</MenuItem>

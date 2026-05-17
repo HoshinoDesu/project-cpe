@@ -13,6 +13,7 @@
 //! 使用 JSON 文件存储用户配置，支持热更新
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -71,12 +72,66 @@ impl Default for WebhookConfig {
     }
 }
 
+/// UI 个性化配置
+///
+/// 使用 Option 区分“用户未设置”和“用户设置为默认值”，便于从旧版
+/// localStorage 做一次性迁移。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_primary_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_interval: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard_layout: Option<Value>,
+}
+
+/// UI 个性化配置更新请求
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiPreferencesPatch {
+    #[serde(default)]
+    pub theme_mode: Option<String>,
+    #[serde(default)]
+    pub theme_primary_color: Option<String>,
+    #[serde(default)]
+    pub device_name: Option<String>,
+    #[serde(default)]
+    pub refresh_interval: Option<u32>,
+    #[serde(default)]
+    pub dashboard_layout: Option<Value>,
+}
+
+impl UiPreferences {
+    fn apply_patch(&mut self, patch: UiPreferencesPatch) {
+        if let Some(theme_mode) = patch.theme_mode {
+            self.theme_mode = Some(theme_mode);
+        }
+        if let Some(theme_primary_color) = patch.theme_primary_color {
+            self.theme_primary_color = Some(theme_primary_color);
+        }
+        if let Some(device_name) = patch.device_name {
+            self.device_name = Some(device_name);
+        }
+        if let Some(refresh_interval) = patch.refresh_interval {
+            self.refresh_interval = Some(refresh_interval);
+        }
+        if let Some(dashboard_layout) = patch.dashboard_layout {
+            self.dashboard_layout = Some(dashboard_layout);
+        }
+    }
+}
+
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub webhook: WebhookConfig,
-    // 未来可以添加更多配置项
+    #[serde(default)]
+    pub ui: UiPreferences,
 }
 
 /// 配置管理器
@@ -141,6 +196,23 @@ impl ConfigManager {
         }
         self.save()
     }
+
+    /// 获取 UI 个性化配置
+    pub fn get_ui_preferences(&self) -> UiPreferences {
+        self.config.read().unwrap().ui.clone()
+    }
+
+    /// 合并更新 UI 个性化配置
+    pub fn update_ui_preferences(&self, patch: UiPreferencesPatch) -> Result<UiPreferences, String> {
+        let updated = {
+            let mut config = self.config.write().unwrap();
+            config.ui.apply_patch(patch);
+            config.ui.clone()
+        };
+
+        self.save()?;
+        Ok(updated)
+    }
     
     /// 更新整个配置
     #[allow(dead_code)]
@@ -194,13 +266,8 @@ impl ConfigManager {
 
 /// 获取默认配置文件路径
 pub fn get_default_config_path() -> PathBuf {
-    // 尝试 /data/config.json（设备上的持久化目录）
-    let device_path = PathBuf::from("/data/config.json");
-    if device_path.parent().map(|p| p.exists()).unwrap_or(false) {
-        return device_path;
-    }
-    
-    // 回退到当前目录
+    // 设备上服务运行在 /home/root/udx710，因此配置固定落在
+    // /home/root/config.json，避免写入 /mnt/data。
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))

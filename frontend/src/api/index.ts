@@ -64,6 +64,8 @@ import type {
   ApnListResponse,
   SetApnRequest,
   ConnectivityCheckResponse,
+  UiPreferences,
+  UiPreferencesPatch,
   CallHistoryResponse,
   WebhookConfig,
   WebhookTestResponse,
@@ -73,6 +75,13 @@ import type {
 
 // API 基础配置
 const API_BASE = '/api'
+
+// WebSocket 地址（开发环境会通过 Vite 代理转发到后端）
+export function getDashboardWebSocketUrl(interval: number): string {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const params = new URLSearchParams({ interval: interval.toString() })
+  return `${protocol}//${window.location.host}${API_BASE}/ws/dashboard?${params.toString()}`
+}
 
 // 通用请求函数
 async function request<T>(
@@ -498,6 +507,21 @@ class UDX710API {
   // 获取联网检测结果 (IPv4/IPv6 ping)
   async getConnectivity() {
     return request<ApiResponse<ConnectivityCheckResponse>>('/connectivity')
+  }
+
+  // ========== UI 个性化配置 ==========
+
+  // 获取设备侧 UI 个性化配置
+  async getUiPreferences() {
+    return request<ApiResponse<UiPreferences>>('/ui/preferences')
+  }
+
+  // 合并更新设备侧 UI 个性化配置
+  async updateUiPreferences(patch: UiPreferencesPatch) {
+    return request<ApiResponse<UiPreferences>>('/ui/preferences', {
+      method: 'POST',
+      body: JSON.stringify(patch),
+    })
   }
 
   // ========== 通话记录功能 ==========

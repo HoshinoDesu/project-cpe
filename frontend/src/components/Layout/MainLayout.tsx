@@ -8,22 +8,65 @@
  * 
  * Copyright (c) 2025 by 1orz, All Rights Reserved. 
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Box, useMediaQuery, useTheme, type Theme } from '@mui/material'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import { RefreshContext } from '../../contexts/RefreshContext'
+import { api } from '../../api'
 
 const DRAWER_WIDTH = 240
+const DEFAULT_REFRESH_INTERVAL = 3000
+const REFRESH_INTERVALS = [0, 1000, 3000, 5000, 10000]
+
+const sanitizeRefreshInterval = (value: unknown) => (
+  typeof value === 'number' && REFRESH_INTERVALS.includes(value)
+    ? value
+    : DEFAULT_REFRESH_INTERVAL
+)
 
 export default function MainLayout() {
   const theme = useTheme<Theme>()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const [mobileOpen, setMobileOpen] = useState(false)
   const [desktopOpen, setDesktopOpen] = useState(true) // 桌面端侧边栏状态，默认展开
-  const [refreshInterval, setRefreshInterval] = useState(3000) // 默认 3 秒（移动端友好）
+  const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_INTERVAL) // 默认 3 秒（移动端友好）
   const [refreshKey, setRefreshKey] = useState(0)
+  const [devicePreferencesReady, setDevicePreferencesReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    api.getUiPreferences()
+      .then((response) => {
+        if (cancelled) return
+        if (typeof response.data?.refresh_interval === 'number') {
+          setRefreshInterval(sanitizeRefreshInterval(response.data.refresh_interval))
+        }
+      })
+      .catch((error) => console.warn('Failed to load refresh interval:', error))
+      .finally(() => {
+        if (!cancelled) {
+          setDevicePreferencesReady(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!devicePreferencesReady) return
+
+    const timer = window.setTimeout(() => {
+      void api.updateUiPreferences({ refresh_interval: refreshInterval })
+        .catch((error) => console.warn('Failed to save refresh interval:', error))
+    }, 250)
+
+    return () => window.clearTimeout(timer)
+  }, [refreshInterval, devicePreferencesReady])
 
   const handleDrawerToggle = () => {
     if (isMobile) {

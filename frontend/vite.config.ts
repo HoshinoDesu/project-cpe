@@ -1,18 +1,33 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { execSync } from 'child_process'
+import { execSync, type ExecSyncOptions } from 'node:child_process'
 import { readFileSync } from 'fs'
 import { fileURLToPath, URL } from 'node:url'
 
 // Read version and git info at build time
 const getVersionInfo = () => {
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+  let version = '0.0.0'
+
   try {
-    const version = readFileSync('../VERSION', 'utf-8').trim()
-    const gitBranch = execSync('git rev-parse --abbrev-ref HEAD').toString().trim()
-    const gitCommit = execSync('git rev-parse --short HEAD').toString().trim()
+    version = readFileSync(new URL('../VERSION', import.meta.url), 'utf-8').trim()
+  } catch {
+    version = '0.0.0'
+  }
+
+  const envBranch = process.env.GIT_BRANCH?.trim() || ''
+  const envCommit = process.env.GIT_COMMIT?.trim() || ''
+  if (envBranch || envCommit) {
+    return { version, gitBranch: envBranch, gitCommit: envCommit }
+  }
+
+  try {
+    const gitOptions: ExecSyncOptions = { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'] }
+    const gitBranch = execSync('git rev-parse --abbrev-ref HEAD', gitOptions).toString().trim()
+    const gitCommit = execSync('git rev-parse --short HEAD', gitOptions).toString().trim()
     return { version, gitBranch, gitCommit }
   } catch {
-    return { version: '3.0.0', gitBranch: 'unknown', gitCommit: 'unknown' }
+    return { version, gitBranch: '', gitCommit: '' }
   }
 }
 
@@ -45,6 +60,7 @@ export default defineConfig({
       '/api': {
         target: 'http://192.168.66.1:3000',
         changeOrigin: true,
+        ws: true,
       }
     }
   },

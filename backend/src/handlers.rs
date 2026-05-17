@@ -139,34 +139,35 @@ async fn fetch_neighbor_cells(
 ///   }
 /// }
 /// ```
+pub(crate) async fn collect_cells(conn: &Connection) -> Result<CellsResponse, String> {
+    // 1. 获取服务小区信息（包含网络制式）
+    let serving_cell = get_serving_cell_info(conn)
+        .await
+        .map_err(|e| format!("Failed to get serving cell info: {}", e))?;
+
+    let tech = serving_cell.tech.as_str();
+
+    // 2. 根据网络制式获取对应的 AT 指令配置
+    let cmd_config = get_cell_command_config(tech)
+        .ok_or_else(|| format!("Unsupported network type: {}", tech))?;
+
+    // 3. 顺序获取主小区和邻区信息
+    // 注意：ofono D-Bus 不支持并发 AT 指令，必须串行执行
+    let primary_cell = fetch_primary_cell(conn, cmd_config.primary, tech).await?;
+    let neighbor_cells = fetch_neighbor_cells(conn, cmd_config.neighbor, tech).await?;
+
+    // 4. 合并主小区和邻区
+    let mut all_cells = vec![primary_cell];
+    all_cells.extend(neighbor_cells);
+
+    Ok(CellsResponse {
+        serving_cell,
+        cells: all_cells,
+    })
+}
+
 pub async fn get_cells(State(conn): State<Arc<Connection>>) -> impl IntoResponse {
-    let result = async {
-        // 1. 获取服务小区信息（包含网络制式）
-        let serving_cell = get_serving_cell_info(&conn)
-            .await
-            .map_err(|e| format!("Failed to get serving cell info: {}", e))?;
-
-        let tech = serving_cell.tech.as_str();
-
-        // 2. 根据网络制式获取对应的 AT 指令配置
-        let cmd_config = get_cell_command_config(tech)
-            .ok_or_else(|| format!("Unsupported network type: {}", tech))?;
-
-        // 3. 顺序获取主小区和邻区信息
-        // 注意：ofono D-Bus 不支持并发 AT 指令，必须串行执行
-        let primary_cell = fetch_primary_cell(&conn, cmd_config.primary, tech).await?;
-        let neighbor_cells = fetch_neighbor_cells(&conn, cmd_config.neighbor, tech).await?;
-
-        // 4. 合并主小区和邻区
-        let mut all_cells = vec![primary_cell];
-        all_cells.extend(neighbor_cells);
-
-        Ok::<_, String>(CellsResponse {
-            serving_cell,
-            cells: all_cells,
-        })
-    }
-    .await;
+    let result = collect_cells(&conn).await;
 
     match result {
         Ok(data) => (
@@ -846,117 +847,118 @@ pub async fn get_cpu_info() -> impl IntoResponse {
 ///   }
 /// }
 /// ```
-pub async fn get_system_stats() -> impl IntoResponse {
+pub(crate) async fn collect_system_stats() -> Result<SystemStatsResponse, String> {
     use std::time::{Duration, Instant};
     use tokio::time::sleep;
-    
-    let result: Result<SystemStatsResponse, String> = async {
-        // 获取网速和 CPU 使用率（并行异步采样）
-        let interfaces = get_active_interfaces()?;
-        let mut first_samples = Vec::new();
-        for interface in &interfaces {
-            match read_interface_stats(interface) {
-                Ok((rx, tx)) => first_samples.push((interface.clone(), rx, tx)),
-                Err(_) => continue,
-            }
+
+    // 获取网速和 CPU 使用率（并行异步采样）
+    let interfaces = get_active_interfaces()?;
+    let mut first_samples = Vec::new();
+    for interface in &interfaces {
+        match read_interface_stats(interface) {
+            Ok((rx, tx)) => first_samples.push((interface.clone(), rx, tx)),
+            Err(_) => continue,
         }
-        
-        // 同时开始 CPU 采样
-        let cpu_usage_future = sample_cpu_usage();
-        
-        let start = Instant::now();
-        // 等待 1 秒采样网速（CPU 采样只需 200ms，会先完成）
-        let cpu_usage = cpu_usage_future.await.unwrap_or(0.0);
-        
-        // 补足剩余时间到 1 秒
-        let elapsed_so_far = start.elapsed();
-        if elapsed_so_far < Duration::from_secs(1) {
-            sleep(Duration::from_secs(1) - elapsed_so_far).await;
-        }
-        let elapsed = start.elapsed().as_secs_f64();
-        
-        let mut speed_data = Vec::new();
-        for (interface, rx1, tx1) in first_samples {
-            if let Ok((rx2, tx2)) = read_interface_stats(&interface) {
-                let rx_speed = ((rx2.saturating_sub(rx1)) as f64 / elapsed) as u64;
-                let tx_speed = ((tx2.saturating_sub(tx1)) as f64 / elapsed) as u64;
-                
-                speed_data.push(NetworkSpeed {
-                    interface,
-                    rx_bytes_per_sec: rx_speed,
-                    tx_bytes_per_sec: tx_speed,
-                    total_rx_bytes: rx2,
-                    total_tx_bytes: tx2,
-                });
-            }
-        }
-        
-        // 获取内存信息
-        let (total, available, cached, buffers) = read_memory_info()?;
-        let used = total.saturating_sub(available);
-        let used_percent = if total > 0 {
-            (used as f64 / total as f64) * 100.0
-        } else {
-            0.0
-        };
-        
-        // 获取磁盘信息
-        let disk = read_disk_info();
-        
-        // 获取 CPU 负载（使用之前采样的 CPU 使用率）
-        let mut cpu_load = read_cpu_load_sync().unwrap_or_default();
-        cpu_load.load_percent = cpu_usage;
-        
-        // 获取运行时间
-        let (uptime, idle) = read_uptime()?;
-        let formatted = format_uptime(uptime);
-        
-        // 获取系统信息（uname）
-        let system_info = read_system_info()?;
-        
-        // 获取温度
-        let temperature = read_temperature_sensors();
-        
-        // 获取 USB 模式
-        let usb_mode = match usb_switch::get_usb_mode_config() {
-            Ok(config) => UsbModeResponse {
-                current_mode: config.current_mode,
-                current_mode_name: get_mode_name(config.current_mode),
-                permanent_mode: config.permanent_mode,
-                temporary_mode: config.temporary_mode,
-                needs_reboot: true,
-                read_mode: "hardware".to_string(),
-            },
-            Err(_) => UsbModeResponse::default(),
-        };
-        
-        Ok(SystemStatsResponse {
-            network_speed: NetworkSpeedResponse {
-                interfaces: speed_data,
-                interval_seconds: elapsed,
-            },
-            memory: MemoryInfo {
-                total_bytes: total,
-                available_bytes: available,
-                used_bytes: used,
-                used_percent,
-                cached_bytes: cached,
-                buffers_bytes: buffers,
-            },
-            disk,
-            cpu_load,
-            uptime: UptimeInfo {
-                uptime_seconds: uptime,
-                idle_seconds: idle,
-                uptime_formatted: formatted,
-            },
-            system_info,
-            temperature,
-            usb_mode,
-        })
     }
-    .await;
-    
+
+    // 同时开始 CPU 采样
+    let cpu_usage_future = sample_cpu_usage();
+
+    let start = Instant::now();
+    // 等待 1 秒采样网速（CPU 采样只需 200ms，会先完成）
+    let cpu_usage = cpu_usage_future.await.unwrap_or(0.0);
+
+    // 补足剩余时间到 1 秒
+    let elapsed_so_far = start.elapsed();
+    if elapsed_so_far < Duration::from_secs(1) {
+        sleep(Duration::from_secs(1) - elapsed_so_far).await;
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+
+    let mut speed_data = Vec::new();
+    for (interface, rx1, tx1) in first_samples {
+        if let Ok((rx2, tx2)) = read_interface_stats(&interface) {
+            let rx_speed = ((rx2.saturating_sub(rx1)) as f64 / elapsed) as u64;
+            let tx_speed = ((tx2.saturating_sub(tx1)) as f64 / elapsed) as u64;
+
+            speed_data.push(NetworkSpeed {
+                interface,
+                rx_bytes_per_sec: rx_speed,
+                tx_bytes_per_sec: tx_speed,
+                total_rx_bytes: rx2,
+                total_tx_bytes: tx2,
+            });
+        }
+    }
+
+    // 获取内存信息
+    let (total, available, cached, buffers) = read_memory_info()?;
+    let used = total.saturating_sub(available);
+    let used_percent = if total > 0 {
+        (used as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // 获取磁盘信息
+    let disk = read_disk_info();
+
+    // 获取 CPU 负载（使用之前采样的 CPU 使用率）
+    let mut cpu_load = read_cpu_load_sync().unwrap_or_default();
+    cpu_load.load_percent = cpu_usage;
+
+    // 获取运行时间
+    let (uptime, idle) = read_uptime()?;
+    let formatted = format_uptime(uptime);
+
+    // 获取系统信息（uname）
+    let system_info = read_system_info()?;
+
+    // 获取温度
+    let temperature = read_temperature_sensors();
+
+    // 获取 USB 模式
+    let usb_mode = match usb_switch::get_usb_mode_config() {
+        Ok(config) => UsbModeResponse {
+            current_mode: config.current_mode,
+            current_mode_name: get_mode_name(config.current_mode),
+            permanent_mode: config.permanent_mode,
+            temporary_mode: config.temporary_mode,
+            needs_reboot: true,
+            read_mode: "hardware".to_string(),
+        },
+        Err(_) => UsbModeResponse::default(),
+    };
+
+    Ok(SystemStatsResponse {
+        network_speed: NetworkSpeedResponse {
+            interfaces: speed_data,
+            interval_seconds: elapsed,
+        },
+        memory: MemoryInfo {
+            total_bytes: total,
+            available_bytes: available,
+            used_bytes: used,
+            used_percent,
+            cached_bytes: cached,
+            buffers_bytes: buffers,
+        },
+        disk,
+        cpu_load,
+        uptime: UptimeInfo {
+            uptime_seconds: uptime,
+            idle_seconds: idle,
+            uptime_formatted: formatted,
+        },
+        system_info,
+        temperature,
+        usb_mode,
+    })
+}
+
+pub async fn get_system_stats() -> impl IntoResponse {
+    let result = collect_system_stats().await;
+
     match result {
         Ok(data) => (
             StatusCode::OK,
@@ -2512,14 +2514,18 @@ pub async fn set_apn_handler(
 /// GET /api/connectivity - 联网检测
 ///
 /// 通过 ping 检测 IPv4 和 IPv6 连通性
-pub async fn get_connectivity_check() -> (StatusCode, Json<ApiResponse<ConnectivityCheckResponse>>) {
+pub(crate) fn collect_connectivity_check() -> ConnectivityCheckResponse {
     let ipv4_result = ping_host("223.5.5.5", false);
     let ipv6_result = ping_host("2400:3200::1", true);
-    
-    let response = ConnectivityCheckResponse {
+
+    ConnectivityCheckResponse {
         ipv4: ipv4_result,
         ipv6: ipv6_result,
-    };
+    }
+}
+
+pub async fn get_connectivity_check() -> (StatusCode, Json<ApiResponse<ConnectivityCheckResponse>>) {
+    let response = collect_connectivity_check();
     
     (
         StatusCode::OK,
@@ -2656,6 +2662,34 @@ pub async fn clear_call_history_handler(
 }
 
 // ============ Webhook 配置 API ============
+
+/// GET /api/ui/preferences - 获取 UI 个性化配置
+pub async fn get_ui_preferences_handler(
+    State(config_manager): State<Arc<ConfigManager>>,
+) -> (StatusCode, Json<ApiResponse<crate::config::UiPreferences>>) {
+    let preferences = config_manager.get_ui_preferences();
+    (
+        StatusCode::OK,
+        Json(ApiResponse::success_with_message("Success", preferences)),
+    )
+}
+
+/// POST /api/ui/preferences - 合并更新 UI 个性化配置
+pub async fn update_ui_preferences_handler(
+    State(config_manager): State<Arc<ConfigManager>>,
+    Json(patch): Json<crate::config::UiPreferencesPatch>,
+) -> (StatusCode, Json<ApiResponse<crate::config::UiPreferences>>) {
+    match config_manager.update_ui_preferences(patch) {
+        Ok(preferences) => (
+            StatusCode::OK,
+            Json(ApiResponse::success_with_message("UI preferences updated", preferences)),
+        ),
+        Err(e) => (
+            StatusCode::OK,
+            Json(ApiResponse::error(format!("Failed to update UI preferences: {}", e))),
+        ),
+    }
+}
 
 /// GET /api/webhook/config - 获取 Webhook 配置
 pub async fn get_webhook_config_handler(

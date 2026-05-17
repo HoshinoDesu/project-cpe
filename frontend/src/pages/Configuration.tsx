@@ -47,9 +47,13 @@ import {
   Webhook,
   Add,
   PlayArrow,
+  Palette,
+  Badge,
+  RestartAlt,
 } from '@mui/icons-material'
 import { api } from '../api'
 import ErrorSnackbar from '../components/ErrorSnackbar'
+import { useTheme as useAppTheme, THEME_COLOR_PRESETS, DEFAULT_DEVICE_NAME, DEFAULT_THEME_COLOR } from '../contexts/ThemeContext'
 import type { UsbModeResponse, AirplaneModeResponse, WebhookConfig } from '../api/types'
 import { DEFAULT_SMS_TEMPLATE, DEFAULT_CALL_TEMPLATE } from '../api/types'
 
@@ -58,11 +62,22 @@ interface HealthStatus {
   timestamp?: string
 }
 
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
+
 export default function ConfigurationPage() {
+  const {
+    themeColor,
+    setThemeColor,
+    deviceName,
+    setDeviceName,
+    resetAppearanceSettings,
+  } = useAppTheme()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | false>('dataConnection')
+  const [deviceNameDraft, setDeviceNameDraft] = useState(deviceName)
+  const [themeColorDraft, setThemeColorDraft] = useState(themeColor)
   
   const [dataStatus, setDataStatus] = useState(false)
   const [usbMode, setUsbMode] = useState<UsbModeResponse | null>(null)
@@ -154,8 +169,45 @@ export default function ConfigurationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    setDeviceNameDraft(deviceName)
+  }, [deviceName])
+
+  useEffect(() => {
+    setThemeColorDraft(themeColor)
+  }, [themeColor])
+
   const handleAccordionChange = (panel: string) => (_event: React.SyntheticEvent, isExpanded: boolean) => {
     setExpanded(isExpanded ? panel : false)
+  }
+
+  const handleThemeColorChange = (color: string) => {
+    setThemeColorDraft(color)
+    if (HEX_COLOR_PATTERN.test(color)) {
+      setThemeColor(color)
+    }
+  }
+
+  const handleSaveAppearance = () => {
+    if (!deviceNameDraft.trim()) {
+      setError('设备名不能为空')
+      return
+    }
+    if (!HEX_COLOR_PATTERN.test(themeColorDraft)) {
+      setError('请输入有效的 6 位十六进制颜色')
+      return
+    }
+
+    setDeviceName(deviceNameDraft)
+    setThemeColor(themeColorDraft)
+    setSuccess('界面设置已保存')
+  }
+
+  const handleResetAppearance = () => {
+    resetAppearanceSettings()
+    setDeviceNameDraft(DEFAULT_DEVICE_NAME)
+    setThemeColorDraft(DEFAULT_THEME_COLOR)
+    setSuccess('界面设置已恢复默认')
   }
 
   const handleDataToggle = () => {
@@ -443,6 +495,144 @@ export default function ConfigurationPage() {
 
       {/* 配置面板 */}
       <Box>
+        {/* 界面外观 */}
+        <Accordion
+          expanded={expanded === 'appearance'}
+          onChange={handleAccordionChange('appearance')}
+        >
+          <AccordionSummary expandIcon={<ExpandMore />}>
+            <Box display="flex" alignItems="center" gap={1} width="100%">
+              <Palette color="primary" />
+              <Typography fontWeight={600}>界面外观</Typography>
+              <Box flexGrow={1} />
+              <Chip
+                label={deviceName}
+                color="primary"
+                size="small"
+                onClick={(e: MouseEvent) => e.stopPropagation()}
+              />
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails sx={{ pt: 2.25 }}>
+            <Grid container spacing={3}>
+              <Grid size={{ xs: 12, md: 5 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1.25}>
+                  <Badge color="primary" fontSize="small" />
+                  <Typography variant="subtitle2">设备名</Typography>
+                </Box>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="设备名"
+                  value={deviceNameDraft}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setDeviceNameDraft(e.target.value.slice(0, 32))}
+                  inputProps={{ maxLength: 32 }}
+                  helperText="用于左上角标识和浏览器标题"
+                  sx={{
+                    '& .MuiFormHelperText-root': { mt: 0.75 },
+                  }}
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, md: 7 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1.25}>
+                  <Palette color="primary" fontSize="small" />
+                  <Typography variant="subtitle2">主题色</Typography>
+                </Box>
+                <Box display="flex" gap={1.25} rowGap={1.25} flexWrap="wrap" alignItems="center" mb={1.75}>
+                  <Box
+                    component="input"
+                    type="color"
+                    value={HEX_COLOR_PATTERN.test(themeColorDraft) ? themeColorDraft : themeColor}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => handleThemeColorChange(e.target.value)}
+                    aria-label="主题色调色盘"
+                    sx={(theme) => ({
+                      width: 46,
+                      height: 36,
+                      p: 0.5,
+                      cursor: 'pointer',
+                      borderRadius: 1.5,
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: theme.palette.mode === 'dark' ? 'grey.900' : 'background.paper',
+                      boxShadow: theme.palette.mode === 'dark'
+                        ? 'inset 0 0 0 1px rgba(255,255,255,0.04)'
+                        : 'inset 0 0 0 1px rgba(0,0,0,0.02)',
+                      '&::-webkit-color-swatch-wrapper': {
+                        p: 0,
+                      },
+                      '&::-webkit-color-swatch': {
+                        border: 'none',
+                        borderRadius: 1,
+                      },
+                      '&::-moz-color-swatch': {
+                        border: 'none',
+                        borderRadius: 1,
+                      },
+                    })}
+                  />
+                  <TextField
+                    size="small"
+                    label="HEX"
+                    value={themeColorDraft}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => handleThemeColorChange(e.target.value)}
+                    error={!HEX_COLOR_PATTERN.test(themeColorDraft)}
+                    sx={{ width: { xs: 120, sm: 132 } }}
+                    inputProps={{ maxLength: 7 }}
+                  />
+                  <Box display="flex" gap={0.9} rowGap={0.9} flexWrap="wrap">
+                    {THEME_COLOR_PRESETS.map((preset) => (
+                      <Box
+                        key={preset.value}
+                        component="button"
+                        type="button"
+                        aria-label={preset.label}
+                        onClick={() => handleThemeColorChange(preset.value)}
+                        sx={{
+                          width: 28,
+                          height: 28,
+                          p: 0,
+                          cursor: 'pointer',
+                          borderRadius: 1.25,
+                          bgcolor: preset.value,
+                          border: '2px solid',
+                          borderColor: themeColorDraft.toLowerCase() === preset.value ? 'text.primary' : 'divider',
+                          boxShadow: themeColorDraft.toLowerCase() === preset.value ? 2 : 0,
+                          '&:focus-visible': {
+                            outline: '2px solid',
+                            outlineColor: 'primary.main',
+                            outlineOffset: 2,
+                          },
+                        }}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              </Grid>
+            </Grid>
+
+            <Divider sx={{ my: 2 }} />
+
+            <Box display="flex" gap={1} flexWrap="wrap">
+              <Button
+                variant="contained"
+                onClick={handleSaveAppearance}
+                disabled={!deviceNameDraft.trim() || !HEX_COLOR_PATTERN.test(themeColorDraft)}
+              >
+                保存界面设置
+              </Button>
+              <Button
+                variant="outlined"
+                color="inherit"
+                startIcon={<RestartAlt />}
+                onClick={handleResetAppearance}
+              >
+                恢复默认
+              </Button>
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+
         {/* 数据连接配置 */}
         <Accordion
           expanded={expanded === 'dataConnection'}
