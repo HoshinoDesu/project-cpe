@@ -30,6 +30,21 @@ const getAverageLatency = (values: number[]) => (
     : undefined
 )
 
+const getLatencyAxis = (history: number[], latency?: number) => {
+  const values = [
+    ...history,
+    ...(typeof latency === 'number' && Number.isFinite(latency) ? [latency] : []),
+  ]
+  const center = getAverageLatency(values) ?? 0
+  const maxDeviation = values.reduce((max, value) => Math.max(max, Math.abs(value - center)), 0)
+  const range = Math.max(maxDeviation * 1.45, center * 0.12, 8)
+
+  return {
+    min: Math.max(0, center - range),
+    max: center + range,
+  }
+}
+
 function LatencyLine({
   label,
   latency,
@@ -45,7 +60,7 @@ function LatencyLine({
   const color = success ? theme.palette.success.main : theme.palette.error.main
   const gridColor = alpha(theme.palette.divider, theme.palette.mode === 'dark' ? 0.34 : 0.24)
   const avgLatency = getAverageLatency(history)
-  const maxLatency = Math.max(...history, latency ?? 0, 1)
+  const latencyAxis = getLatencyAxis(history, latency)
 
   return (
     <Box
@@ -104,6 +119,16 @@ function LatencyLine({
             maskImage: 'linear-gradient(to top, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.54) 48%, rgba(0, 0, 0, 0) 100%)',
             WebkitMaskImage: 'linear-gradient(to top, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.54) 48%, rgba(0, 0, 0, 0) 100%)',
           },
+          '&::after': {
+            content: '""',
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: '50%',
+            zIndex: 0,
+            borderTop: `1px solid ${alpha(color, theme.palette.mode === 'dark' ? 0.16 : 0.12)}`,
+            pointerEvents: 'none',
+          },
           '& > *': {
             position: 'relative',
             zIndex: 1,
@@ -122,9 +147,10 @@ function LatencyLine({
             data={history}
             height={28}
             area
-            curve="natural"
+            curve="monotoneX"
             color={color}
-            yAxis={{ min: 0, max: maxLatency * 1.2 }}
+            skipAnimation
+            yAxis={latencyAxis}
             margin={{ top: 2, bottom: 2, left: 0, right: 0 }}
           />
         ) : (

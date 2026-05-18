@@ -27,15 +27,89 @@ interface SmoothNetworkInterface extends NetworkSpeedModel {
   txData: number[]
 }
 
-const SMOOTH_DURATION_MS = 720
+const SMOOTH_DURATION_MS = 360
 const MIN_SPEED_CHART_HEIGHT = 54
+type NetworkSpeedDensity = 'regular' | 'compact' | 'dense'
+
+const densityStyles: Record<NetworkSpeedDensity, {
+  contentPadding: number
+  contentPaddingBottom: number
+  headerMarginBottom: number
+  interfacePadding: number
+  interfaceGap: number
+  interfaceHeaderMarginBottom: number
+  laneHeaderMarginBottom: number
+  laneGap: number
+  iconSize: number
+  chartMinHeight: number
+  speedFontSize: string
+  labelFontSize: string
+  showSecondaryMeta: boolean
+}> = {
+  regular: {
+    contentPadding: 2,
+    contentPaddingBottom: 2.5,
+    headerMarginBottom: 1.5,
+    interfacePadding: 1.75,
+    interfaceGap: 1.5,
+    interfaceHeaderMarginBottom: 1.5,
+    laneHeaderMarginBottom: 0.75,
+    laneGap: 1.5,
+    iconSize: 28,
+    chartMinHeight: MIN_SPEED_CHART_HEIGHT,
+    speedFontSize: '1.15rem',
+    labelFontSize: '0.75rem',
+    showSecondaryMeta: true,
+  },
+  compact: {
+    contentPadding: 1.25,
+    contentPaddingBottom: 1.35,
+    headerMarginBottom: 0.9,
+    interfacePadding: 1.05,
+    interfaceGap: 1,
+    interfaceHeaderMarginBottom: 0.8,
+    laneHeaderMarginBottom: 0.45,
+    laneGap: 0.8,
+    iconSize: 22,
+    chartMinHeight: 40,
+    speedFontSize: '1rem',
+    labelFontSize: '0.72rem',
+    showSecondaryMeta: true,
+  },
+  dense: {
+    contentPadding: 0.85,
+    contentPaddingBottom: 0.9,
+    headerMarginBottom: 0.55,
+    interfacePadding: 0.7,
+    interfaceGap: 0.65,
+    interfaceHeaderMarginBottom: 0.45,
+    laneHeaderMarginBottom: 0.25,
+    laneGap: 0.5,
+    iconSize: 18,
+    chartMinHeight: 28,
+    speedFontSize: '0.86rem',
+    labelFontSize: '0.68rem',
+    showSecondaryMeta: false,
+  },
+}
+
+const getNetworkSpeedDensity = (height: number, interfaceCount: number): NetworkSpeedDensity => {
+  if (height <= 0) return 'regular'
+
+  const visibleInterfaces = Math.max(interfaceCount, 1)
+  const perInterfaceHeight = (height - 42) / visibleInterfaces
+
+  if (height < 250 || perInterfaceHeight < 126) return 'dense'
+  if (height < 340 || perInterfaceHeight < 170) return 'compact'
+  return 'regular'
+}
 
 const splitSpeed = (bytesPerSec: number) => {
   const [value, ...unit] = formatSpeed(bytesPerSec).split(' ')
   return { value, unit: unit.join(' ') }
 }
 
-const easeOutCubic = (value: number) => 1 - Math.pow(1 - value, 3)
+const easeOutQuad = (value: number) => value * (2 - value)
 
 const lerp = (from: number, to: number, progress: number) => from + (to - from) * progress
 
@@ -86,16 +160,56 @@ const interpolateInterfaces = (
   })
 }
 
-function useElementHeight() {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const [height, setHeight] = useState(MIN_SPEED_CHART_HEIGHT)
+function useElementSize() {
+  const [element, setElement] = useState<HTMLDivElement | null>(null)
+  const [size, setSize] = useState({ width: 0, height: 0 })
 
   useEffect(() => {
-    const node = ref.current
+    const node = element
     if (!node) return undefined
 
     const measure = () => {
-      const nextHeight = Math.max(MIN_SPEED_CHART_HEIGHT, Math.floor(node.getBoundingClientRect().height))
+      const rect = node.getBoundingClientRect()
+      const nextSize = {
+        width: Math.floor(rect.width),
+        height: Math.floor(rect.height),
+      }
+
+      setSize((currentSize) => (
+        Math.abs(currentSize.width - nextSize.width) > 1 ||
+        Math.abs(currentSize.height - nextSize.height) > 1
+          ? nextSize
+          : currentSize
+      ))
+    }
+
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? undefined
+      : new ResizeObserver(measure)
+
+    resizeObserver?.observe(node)
+    measure()
+    window.addEventListener('resize', measure)
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [element])
+
+  return { setElement, ...size }
+}
+
+function useElementHeight(minHeight: number) {
+  const [element, setElement] = useState<HTMLDivElement | null>(null)
+  const [height, setHeight] = useState(minHeight)
+
+  useEffect(() => {
+    const node = element
+    if (!node) return undefined
+
+    const measure = () => {
+      const nextHeight = Math.max(minHeight, Math.floor(node.getBoundingClientRect().height))
       setHeight((currentHeight) => (Math.abs(currentHeight - nextHeight) > 1 ? nextHeight : currentHeight))
     }
 
@@ -111,32 +225,36 @@ function useElementHeight() {
       resizeObserver?.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [])
+  }, [element, minHeight])
 
-  return { ref, height }
+  return { setElement, height }
 }
 
 function SpeedSparkLine({
   data,
   color,
   maxSpeed,
+  minHeight,
 }: {
   data: number[]
   color: string
   maxSpeed: number
+  minHeight: number
 }) {
-  const { ref, height } = useElementHeight()
+  const { setElement, height } = useElementHeight(minHeight)
+  const yPadding = Math.max(maxSpeed * 0.08, 0.08)
 
   return (
-    <Box ref={ref} sx={{ flex: 1, minHeight: MIN_SPEED_CHART_HEIGHT, width: '100%' }}>
+    <Box ref={setElement} sx={{ flex: 1, minHeight, width: '100%' }}>
       <SparkLineChart
         data={data}
         height={height}
         area
-        curve="natural"
+        curve="monotoneX"
         color={color}
-        yAxis={{ min: 0, max: maxSpeed * 1.15 }}
-        margin={{ top: 6, bottom: 5, left: 0, right: 0 }}
+        skipAnimation
+        yAxis={{ min: -yPadding, max: maxSpeed * 1.15 }}
+        margin={{ top: 5, bottom: 8, left: 0, right: 0 }}
       />
     </Box>
   )
@@ -157,9 +275,14 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
     () => buildTargetInterfaces(systemStats, speedHistory),
     [systemStats, speedHistory]
   )
+  const targetInterfaceByName = useMemo(
+    () => new Map(targetInterfaces.map((iface) => [iface.interface, iface])),
+    [targetInterfaces]
+  )
   const [smoothInterfaces, setSmoothInterfaces] = useState<SmoothNetworkInterface[]>(targetInterfaces)
   const smoothInterfacesRef = useRef<SmoothNetworkInterface[]>(targetInterfaces)
   const frameRef = useRef<number | undefined>(undefined)
+  const { setElement: setContentElement, height: contentHeight } = useElementSize()
 
   useEffect(() => {
     if (frameRef.current !== undefined) {
@@ -202,7 +325,7 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
     const startedAt = performance.now()
 
     const animate = (now: number) => {
-      const progress = easeOutCubic(Math.min((now - startedAt) / SMOOTH_DURATION_MS, 1))
+      const progress = easeOutQuad(Math.min((now - startedAt) / SMOOTH_DURATION_MS, 1))
       const nextInterfaces = interpolateInterfaces(startInterfaces, targetInterfaces, progress)
       smoothInterfacesRef.current = nextInterfaces
       setSmoothInterfaces(nextInterfaces)
@@ -227,6 +350,8 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
   }, [targetInterfaces])
 
   const displayInterfaces = smoothInterfaces.length > 0 ? smoothInterfaces : targetInterfaces
+  const density = getNetworkSpeedDensity(contentHeight, displayInterfaces.length)
+  const sizes = densityStyles[density]
 
   const renderSpeedLane = (
     label: string,
@@ -240,39 +365,52 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
 
     return (
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <Box display="flex" alignItems="baseline" justifyContent="space-between" gap={1} mb={0.75}>
-          <Box display="flex" alignItems="center" gap={0.75}>
+        <Box display="flex" alignItems="baseline" justifyContent="space-between" gap={0.75} mb={sizes.laneHeaderMarginBottom}>
+          <Box display="flex" alignItems="center" gap={0.6} minWidth={0}>
             <Box
               sx={{
-                width: 28,
-                height: 28,
+                width: sizes.iconSize,
+                height: sizes.iconSize,
+                flex: '0 0 auto',
                 borderRadius: '50%',
                 display: 'grid',
                 placeItems: 'center',
                 color,
                 bgcolor: alpha(color, theme.palette.mode === 'dark' ? 0.18 : 0.1),
+                '& .MuiSvgIcon-root': {
+                  fontSize: Math.max(sizes.iconSize - 8, 12),
+                },
               }}
             >
               {icon}
             </Box>
-            <Typography variant="caption" color="text.secondary" fontWeight={600}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              fontWeight={600}
+              sx={{ fontSize: sizes.labelFontSize, lineHeight: 1.1 }}
+            >
               {label}
             </Typography>
           </Box>
-          <Box display="flex" alignItems="baseline" gap={0.5} sx={{ minWidth: 112, justifyContent: 'flex-end' }}>
+          <Box display="flex" alignItems="baseline" gap={0.35} sx={{ minWidth: 0, justifyContent: 'flex-end', flexShrink: 0 }}>
             <Typography
               variant="h6"
               sx={{
                 color,
                 fontWeight: 700,
-                fontSize: '1.15rem',
+                fontSize: sizes.speedFontSize,
                 lineHeight: 1,
                 fontVariantNumeric: 'tabular-nums',
               }}
             >
               {speed.value}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ fontWeight: 600, fontSize: sizes.labelFontSize, lineHeight: 1 }}
+            >
               {speed.unit}
             </Typography>
           </Box>
@@ -280,7 +418,7 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
         <Box
           sx={{
             flex: 1,
-            minHeight: MIN_SPEED_CHART_HEIGHT,
+            minHeight: sizes.chartMinHeight,
             width: '100%',
             display: 'flex',
             overflow: 'hidden',
@@ -307,6 +445,7 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
               data={chartData}
               color={color}
               maxSpeed={maxSpeed}
+              minHeight={sizes.chartMinHeight}
             />
           ) : (
             <Box height="100%" display="flex" alignItems="center" justifyContent="center">
@@ -324,27 +463,47 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
   return (
     <Card sx={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
       <CardContent
+        ref={setContentElement}
         sx={{
           height: '100%',
           minHeight: 0,
           boxSizing: 'border-box',
           display: 'flex',
           flexDirection: 'column',
-          p: 2,
-          pb: 2.5,
-          '&:last-child': { pb: 2.5 },
+          p: sizes.contentPadding,
+          pb: sizes.contentPaddingBottom,
+          '&:last-child': { pb: sizes.contentPaddingBottom },
         }}
       >
-        <Box display="flex" alignItems="center" gap={1} mb={1.5} sx={{ flex: '0 0 auto' }}>
-          <Speed color="primary" />
-          <Typography variant="subtitle2" color="text.secondary">实时网速</Typography>
-          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+        <Box display="flex" alignItems="center" gap={0.8} mb={sizes.headerMarginBottom} sx={{ flex: '0 0 auto', minWidth: 0 }}>
+          <Speed color="primary" sx={{ fontSize: density === 'regular' ? 24 : 20 }} />
+          <Typography
+            variant="subtitle2"
+            color="text.secondary"
+            sx={{
+              minWidth: 0,
+              fontSize: density === 'dense' ? '0.82rem' : undefined,
+              lineHeight: 1.2,
+            }}
+          >
+            实时网速
+          </Typography>
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            sx={{
+              ml: 'auto',
+              display: sizes.showSecondaryMeta ? 'block' : 'none',
+              lineHeight: 1.1,
+              whiteSpace: 'nowrap',
+            }}
+          >
             {SPEED_HISTORY_MAX_POINTS}s 趋势
           </Typography>
         </Box>
         {displayInterfaces.length > 0 ? (
           <Stack
-            spacing={1.5}
+            spacing={sizes.interfaceGap}
             sx={{
               flex: 1,
               minHeight: 0,
@@ -356,9 +515,10 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
             {displayInterfaces.map((iface) => {
               const rxData = iface.rxData
               const txData = iface.txData
+              const scaleInterface = targetInterfaceByName.get(iface.interface) ?? iface
               const maxSpeed = Math.max(
-                Math.max(...rxData, 1),
-                Math.max(...txData, 1)
+                Math.max(...scaleInterface.rxData, 1),
+                Math.max(...scaleInterface.txData, 1)
               )
               
               return (
@@ -366,7 +526,7 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
                   key={iface.interface} 
                   variant="outlined" 
                   sx={{ 
-                    p: 1.75,
+                    p: sizes.interfacePadding,
                     flex: 1,
                     minHeight: 0,
                     display: 'flex',
@@ -385,8 +545,8 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
                     display="flex"
                     alignItems="center"
                     justifyContent="space-between"
-                    gap={1.5}
-                    mb={1.5}
+                    gap={1}
+                    mb={sizes.interfaceHeaderMarginBottom}
                     sx={{ flex: '0 0 auto' }}
                   >
                     <Chip 
@@ -395,6 +555,8 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
                       variant="outlined"
                       sx={{
                         fontWeight: 700,
+                        height: density === 'regular' ? 24 : 21,
+                        fontSize: density === 'dense' ? '0.68rem' : '0.72rem',
                         borderColor: alpha(uploadColor, 0.35),
                         bgcolor: alpha(uploadColor, theme.palette.mode === 'dark' ? 0.12 : 0.06),
                       }}
@@ -402,13 +564,22 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
                     <Typography
                       variant="caption"
                       color="text.secondary"
-                      sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                      sx={{
+                        display: sizes.showSecondaryMeta ? 'block' : 'none',
+                        textAlign: 'right',
+                        fontVariantNumeric: 'tabular-nums',
+                        fontSize: sizes.labelFontSize,
+                        lineHeight: 1.1,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
                     >
                       总流量: ↓ {formatBytes(iface.total_rx_bytes)} / ↑ {formatBytes(iface.total_tx_bytes)}
                     </Typography>
                   </Box>
                   
-                  <Stack spacing={1.5} sx={{ flex: 1, minHeight: 0 }}>
+                  <Stack spacing={sizes.laneGap} sx={{ flex: 1, minHeight: 0 }}>
                     {renderSpeedLane(
                       '下载',
                       <ArrowDownward fontSize="small" />,
