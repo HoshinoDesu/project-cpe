@@ -78,7 +78,7 @@ export const DEFAULT_DASHBOARD_LAYOUT: DashboardLayoutItem[] = [
     minW: SYSTEM_RESOURCES_DEFAULT_SIZE.w,
     minH: SYSTEM_RESOURCES_DEFAULT_SIZE.h,
   },
-  { id: 'speed', x: 0, y: 4, w: 8, h: 5, minW: 5, minH: 4 },
+  { id: 'speed', x: 0, y: 4, w: 8, h: 5, minW: 5, minH: 5 },
   { id: 'temperature', x: 8, y: 7, w: 4, h: 3, minW: 3, minH: 3 },
 ]
 

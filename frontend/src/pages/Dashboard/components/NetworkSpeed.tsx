@@ -9,7 +9,7 @@
  * Copyright (c) 2025 by 1orz, All Rights Reserved. 
  */
 import { Box, Card, CardContent, Typography, Stack, Chip, Paper, useTheme, type Theme } from '@mui/material'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { alpha } from '@/utils/theme'
 import { Speed, ArrowDownward, ArrowUpward } from '@mui/icons-material'
 import { SparkLineChart } from '@mui/x-charts/SparkLineChart'
@@ -27,7 +27,6 @@ interface SmoothNetworkInterface extends NetworkSpeedModel {
   txData: number[]
 }
 
-const SMOOTH_DURATION_MS = 360
 const MIN_SPEED_CHART_HEIGHT = 54
 type NetworkSpeedDensity = 'regular' | 'compact' | 'dense'
 
@@ -109,25 +108,6 @@ const splitSpeed = (bytesPerSec: number) => {
   return { value, unit: unit.join(' ') }
 }
 
-const easeOutQuad = (value: number) => value * (2 - value)
-
-const lerp = (from: number, to: number, progress: number) => from + (to - from) * progress
-
-const alignSeriesValue = (series: number[], targetIndex: number, targetLength: number, fallback: number) => {
-  if (series.length === 0) return fallback
-
-  const sourceIndex = targetIndex + series.length - targetLength
-  if (sourceIndex < 0) return series[0]
-  if (sourceIndex >= series.length) return series[series.length - 1]
-  return series[sourceIndex]
-}
-
-const interpolateSeries = (from: number[], to: number[], progress: number) => (
-  to.map((targetValue, index) => (
-    lerp(alignSeriesValue(from, index, to.length, targetValue), targetValue, progress)
-  ))
-)
-
 const buildTargetInterfaces = (
   systemStats: SystemStatsResponse | null,
   speedHistory: Record<string, InterfaceSpeedHistory>
@@ -141,24 +121,6 @@ const buildTargetInterfaces = (
     }
   }) ?? []
 )
-
-const interpolateInterfaces = (
-  from: SmoothNetworkInterface[],
-  to: SmoothNetworkInterface[],
-  progress: number
-): SmoothNetworkInterface[] => {
-  const fromByName = new Map(from.map((iface) => [iface.interface, iface]))
-
-  return to.map((target) => {
-    const source = fromByName.get(target.interface) ?? target
-
-    return {
-      ...target,
-      rxData: interpolateSeries(source.rxData, target.rxData, progress),
-      txData: interpolateSeries(source.txData, target.txData, progress),
-    }
-  })
-}
 
 function useElementSize() {
   const [element, setElement] = useState<HTMLDivElement | null>(null)
@@ -268,88 +230,13 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
   const subtleBorderColor = theme.palette.mode === 'dark'
     ? alpha(theme.palette.common.white, 0.12)
     : alpha(theme.palette.common.black, 0.08)
-  const chartGridColor = theme.palette.mode === 'dark'
-    ? alpha(theme.palette.common.white, 0.08)
-    : alpha(theme.palette.common.black, 0.055)
+  const chartGridColor = alpha(theme.palette.divider, theme.palette.mode === 'dark' ? 0.34 : 0.24)
   const targetInterfaces = useMemo(
     () => buildTargetInterfaces(systemStats, speedHistory),
     [systemStats, speedHistory]
   )
-  const targetInterfaceByName = useMemo(
-    () => new Map(targetInterfaces.map((iface) => [iface.interface, iface])),
-    [targetInterfaces]
-  )
-  const [smoothInterfaces, setSmoothInterfaces] = useState<SmoothNetworkInterface[]>(targetInterfaces)
-  const smoothInterfacesRef = useRef<SmoothNetworkInterface[]>(targetInterfaces)
-  const frameRef = useRef<number | undefined>(undefined)
   const { setElement: setContentElement, height: contentHeight } = useElementSize()
-
-  useEffect(() => {
-    if (frameRef.current !== undefined) {
-      window.cancelAnimationFrame(frameRef.current)
-    }
-
-    if (targetInterfaces.length === 0) {
-      smoothInterfacesRef.current = []
-      frameRef.current = window.requestAnimationFrame(() => {
-        setSmoothInterfaces([])
-        frameRef.current = undefined
-      })
-      return () => {
-        if (frameRef.current !== undefined) {
-          window.cancelAnimationFrame(frameRef.current)
-          frameRef.current = undefined
-        }
-      }
-    }
-
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const startInterfaces = smoothInterfacesRef.current.length > 0
-      ? smoothInterfacesRef.current
-      : targetInterfaces
-
-    if (reduceMotion) {
-      smoothInterfacesRef.current = targetInterfaces
-      frameRef.current = window.requestAnimationFrame(() => {
-        setSmoothInterfaces(targetInterfaces)
-        frameRef.current = undefined
-      })
-      return () => {
-        if (frameRef.current !== undefined) {
-          window.cancelAnimationFrame(frameRef.current)
-          frameRef.current = undefined
-        }
-      }
-    }
-
-    const startedAt = performance.now()
-
-    const animate = (now: number) => {
-      const progress = easeOutQuad(Math.min((now - startedAt) / SMOOTH_DURATION_MS, 1))
-      const nextInterfaces = interpolateInterfaces(startInterfaces, targetInterfaces, progress)
-      smoothInterfacesRef.current = nextInterfaces
-      setSmoothInterfaces(nextInterfaces)
-
-      if (progress < 1) {
-        frameRef.current = window.requestAnimationFrame(animate)
-      } else {
-        smoothInterfacesRef.current = targetInterfaces
-        setSmoothInterfaces(targetInterfaces)
-        frameRef.current = undefined
-      }
-    }
-
-    frameRef.current = window.requestAnimationFrame(animate)
-
-    return () => {
-      if (frameRef.current !== undefined) {
-        window.cancelAnimationFrame(frameRef.current)
-        frameRef.current = undefined
-      }
-    }
-  }, [targetInterfaces])
-
-  const displayInterfaces = smoothInterfaces.length > 0 ? smoothInterfaces : targetInterfaces
+  const displayInterfaces = targetInterfaces
   const density = getNetworkSpeedDensity(contentHeight, displayInterfaces.length)
   const sizes = densityStyles[density]
 
@@ -362,6 +249,67 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
     maxSpeed: number
   ) => {
     const speed = splitSpeed(bytesPerSec)
+    const chartFrameSx = {
+      position: 'relative',
+      isolation: 'isolate',
+      flex: 1,
+      minHeight: sizes.chartMinHeight,
+      width: '100%',
+      display: 'flex',
+      overflow: 'hidden',
+      borderRadius: 1,
+      background: `linear-gradient(to top, ${alpha(color, theme.palette.mode === 'dark' ? 0.13 : 0.1)} 0%, ${alpha(color, theme.palette.mode === 'dark' ? 0.055 : 0.04)} 48%, transparent 100%)`,
+      '&::before': {
+        content: '""',
+        position: 'absolute',
+        inset: 0,
+        zIndex: 0,
+        pointerEvents: 'none',
+        backgroundImage: `
+          linear-gradient(${chartGridColor} 1px, transparent 1px),
+          linear-gradient(90deg, ${chartGridColor} 1px, transparent 1px)
+        `,
+        backgroundSize: '8px 8px',
+        backgroundPosition: '0 0',
+        maskImage: 'linear-gradient(to top, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.54) 48%, rgba(0, 0, 0, 0) 100%)',
+        WebkitMaskImage: 'linear-gradient(to top, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.54) 48%, rgba(0, 0, 0, 0) 100%)',
+      },
+      '&::after': {
+        content: '""',
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 7,
+        zIndex: 0,
+        borderTop: `1px solid ${alpha(color, theme.palette.mode === 'dark' ? 0.16 : 0.12)}`,
+        pointerEvents: 'none',
+      },
+      '& > *': {
+        position: 'relative',
+        zIndex: 1,
+      },
+      '& .MuiLineElement-root': {
+        strokeWidth: density === 'dense' ? 1.9 : 2.4,
+        filter: `drop-shadow(0 1px 2px ${alpha(color, 0.22)})`,
+      },
+      '& .MuiAreaElement-root': {
+        fillOpacity: theme.palette.mode === 'dark' ? 0.14 : 0.1,
+      },
+    } as const
+    const chart = chartData.length > 1 ? (
+      <SpeedSparkLine
+        data={chartData}
+        color={color}
+        maxSpeed={maxSpeed}
+        minHeight={sizes.chartMinHeight}
+      />
+    ) : (
+      <Box height="100%" display="flex" alignItems="center" justifyContent="center">
+        <Typography variant="caption" color="text.disabled">
+          等待趋势数据
+        </Typography>
+      </Box>
+    )
 
     return (
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -415,45 +363,8 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
             </Typography>
           </Box>
         </Box>
-        <Box
-          sx={{
-            flex: 1,
-            minHeight: sizes.chartMinHeight,
-            width: '100%',
-            display: 'flex',
-            overflow: 'hidden',
-            borderRadius: 1,
-            border: `1px solid ${theme.palette.mode === 'dark' ? alpha(color, 0.18) : subtleBorderColor}`,
-            background: `
-              linear-gradient(180deg, ${alpha(color, theme.palette.mode === 'dark' ? 0.12 : 0.08)}, transparent 72%),
-              repeating-linear-gradient(0deg, transparent 0 17px, ${chartGridColor} 18px),
-              ${alpha(paperColor, theme.palette.mode === 'dark' ? 0.3 : 0.72)}
-            `,
-            '& .MuiLineElement-root': {
-              strokeWidth: 2.4,
-              filter: `drop-shadow(0 1px 3px ${alpha(color, 0.35)})`,
-              transition: 'filter 180ms ease, stroke-width 180ms ease',
-            },
-            '& .MuiAreaElement-root': {
-              fillOpacity: theme.palette.mode === 'dark' ? 0.16 : 0.12,
-              transition: 'fill-opacity 180ms ease',
-            },
-          }}
-        >
-          {chartData.length > 1 ? (
-            <SpeedSparkLine
-              data={chartData}
-              color={color}
-              maxSpeed={maxSpeed}
-              minHeight={sizes.chartMinHeight}
-            />
-          ) : (
-            <Box height="100%" display="flex" alignItems="center" justifyContent="center">
-              <Typography variant="caption" color="text.disabled">
-                等待趋势数据
-              </Typography>
-            </Box>
-          )}
+        <Box sx={chartFrameSx}>
+          {chart}
         </Box>
       </Box>
     )
@@ -515,10 +426,9 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
             {displayInterfaces.map((iface) => {
               const rxData = iface.rxData
               const txData = iface.txData
-              const scaleInterface = targetInterfaceByName.get(iface.interface) ?? iface
               const maxSpeed = Math.max(
-                Math.max(...scaleInterface.rxData, 1),
-                Math.max(...scaleInterface.txData, 1)
+                Math.max(...rxData, 1),
+                Math.max(...txData, 1)
               )
               
               return (
