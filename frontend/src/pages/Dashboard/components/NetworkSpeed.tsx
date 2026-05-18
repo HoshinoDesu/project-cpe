@@ -27,7 +27,7 @@ interface SmoothNetworkInterface extends NetworkSpeedModel {
   txData: number[]
 }
 
-const MIN_SPEED_CHART_HEIGHT = 54
+const MIN_RENDERED_SPEED_CHART_HEIGHT = 18
 type NetworkSpeedDensity = 'regular' | 'compact' | 'dense'
 
 const densityStyles: Record<NetworkSpeedDensity, {
@@ -55,7 +55,7 @@ const densityStyles: Record<NetworkSpeedDensity, {
     laneHeaderMarginBottom: 0.75,
     laneGap: 1.5,
     iconSize: 28,
-    chartMinHeight: MIN_SPEED_CHART_HEIGHT,
+    chartMinHeight: 46,
     speedFontSize: '1.15rem',
     labelFontSize: '0.75rem',
     showSecondaryMeta: true,
@@ -70,7 +70,7 @@ const densityStyles: Record<NetworkSpeedDensity, {
     laneHeaderMarginBottom: 0.45,
     laneGap: 0.8,
     iconSize: 22,
-    chartMinHeight: 40,
+    chartMinHeight: 30,
     speedFontSize: '1rem',
     labelFontSize: '0.72rem',
     showSecondaryMeta: true,
@@ -85,7 +85,7 @@ const densityStyles: Record<NetworkSpeedDensity, {
     laneHeaderMarginBottom: 0.25,
     laneGap: 0.5,
     iconSize: 18,
-    chartMinHeight: 28,
+    chartMinHeight: MIN_RENDERED_SPEED_CHART_HEIGHT,
     speedFontSize: '0.86rem',
     labelFontSize: '0.68rem',
     showSecondaryMeta: false,
@@ -96,10 +96,10 @@ const getNetworkSpeedDensity = (height: number, interfaceCount: number): Network
   if (height <= 0) return 'regular'
 
   const visibleInterfaces = Math.max(interfaceCount, 1)
-  const perInterfaceHeight = (height - 42) / visibleInterfaces
+  const perInterfaceHeight = (height - 44) / visibleInterfaces
 
-  if (height < 250 || perInterfaceHeight < 126) return 'dense'
-  if (height < 340 || perInterfaceHeight < 170) return 'compact'
+  if (height < 300 || perInterfaceHeight < 150) return 'dense'
+  if (height < 430 || perInterfaceHeight < 220) return 'compact'
   return 'regular'
 }
 
@@ -162,16 +162,19 @@ function useElementSize() {
   return { setElement, ...size }
 }
 
-function useElementHeight(minHeight: number) {
+function useElementHeight(fallbackHeight: number) {
   const [element, setElement] = useState<HTMLDivElement | null>(null)
-  const [height, setHeight] = useState(minHeight)
+  const [height, setHeight] = useState(fallbackHeight)
 
   useEffect(() => {
     const node = element
     if (!node) return undefined
 
     const measure = () => {
-      const nextHeight = Math.max(minHeight, Math.floor(node.getBoundingClientRect().height))
+      const measuredHeight = Math.floor(node.getBoundingClientRect().height)
+      const nextHeight = measuredHeight > 0
+        ? Math.max(MIN_RENDERED_SPEED_CHART_HEIGHT, measuredHeight)
+        : fallbackHeight
       setHeight((currentHeight) => (Math.abs(currentHeight - nextHeight) > 1 ? nextHeight : currentHeight))
     }
 
@@ -187,7 +190,7 @@ function useElementHeight(minHeight: number) {
       resizeObserver?.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [element, minHeight])
+  }, [element, fallbackHeight])
 
   return { setElement, height }
 }
@@ -204,10 +207,15 @@ function SpeedSparkLine({
   minHeight: number
 }) {
   const { setElement, height } = useElementHeight(minHeight)
-  const yPadding = Math.max(maxSpeed * 0.08, 0.08)
+  const yPadding = Math.max(maxSpeed * 0.16, 1)
+  const margin = height < 26
+    ? { top: 1, bottom: 2, left: 0, right: 0 }
+    : height < 38
+      ? { top: 2, bottom: 3, left: 0, right: 0 }
+      : { top: 3, bottom: 5, left: 0, right: 0 }
 
   return (
-    <Box ref={setElement} sx={{ flex: 1, minHeight, width: '100%' }}>
+    <Box ref={setElement} sx={{ flex: 1, minHeight: 0, width: '100%' }}>
       <SparkLineChart
         data={data}
         height={height}
@@ -215,8 +223,8 @@ function SpeedSparkLine({
         curve="monotoneX"
         color={color}
         skipAnimation
-        yAxis={{ min: -yPadding, max: maxSpeed * 1.15 }}
-        margin={{ top: 5, bottom: 8, left: 0, right: 0 }}
+        yAxis={{ min: -yPadding, max: maxSpeed + yPadding }}
+        margin={margin}
       />
     </Box>
   )
@@ -253,7 +261,7 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
       position: 'relative',
       isolation: 'isolate',
       flex: 1,
-      minHeight: sizes.chartMinHeight,
+      minHeight: 0,
       width: '100%',
       display: 'flex',
       overflow: 'hidden',
@@ -279,7 +287,7 @@ export function NetworkSpeed({ systemStats, speedHistory }: NetworkSpeedProps) {
         position: 'absolute',
         left: 0,
         right: 0,
-        bottom: 7,
+        bottom: density === 'dense' ? 3 : 5,
         zIndex: 0,
         borderTop: `1px solid ${alpha(color, theme.palette.mode === 'dark' ? 0.16 : 0.12)}`,
         pointerEvents: 'none',
